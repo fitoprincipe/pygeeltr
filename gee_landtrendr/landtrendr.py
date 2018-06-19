@@ -238,7 +238,7 @@ class LandTrendr(object):
             # Select the index band only (example: 'nbr') in the whole collection
             timeserie_index = self.timeSeries.select(self.index)
 
-            img = ee.Algorithms.Test.LandTrendr(
+            img = ee.Algorithms.TemporalSegmentation.LandTrendr(
                 timeSeries=timeserie_index,
                 # self.timeSeries,
                 maxSegments=self.maxSegments,
