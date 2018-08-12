@@ -250,13 +250,11 @@ class LandTrendr(object):
                 bestModelProportion=self.bestModelProportion,
                 minObservationsNeeded=self.minObservationsNeeded)
 
-            listaTimeStart = ee.List([])
-
             def anioslist(img, listanios):
                 time = ee.Date(img.get("system:time_start")).millis()
                 return ee.List(listanios).add(time)
 
-            anios = ee.List(self.timeSeries.iterate(anioslist, listaTimeStart))
+            anios = ee.List(self.timeSeries.iterate(anioslist, ee.List([])))
 
             core = namedtuple("CORE", ["result", "year_list"])
 
@@ -265,7 +263,53 @@ class LandTrendr(object):
             raise ValueError("The time serie must have more than 1 image")
 
     def breakdown(self):
-        """ This method breaks down the resulting array and returns a list of
+        ''' This method breaks down the resulting array and returns a list of
+        images
+
+        :return: A python list of images with the given bands:
+
+            - year = image's year
+
+            - {ind} = index (ndvi, evi, etc)
+
+            - {ind}_fit = index ajustado
+
+            - bkp = breakpoint (1: yes, 0: no).
+
+        It assumes that each image in the collection represents only one year
+        of the time series
+        '''
+        core = self.CORE().result
+        ltr = core.select('LandTrendr')
+        rmse = core.select('rmse')
+        n = self.timeSeries.size()
+        ordered_ts = self.timeSeries.sort('system:time_start')
+        ordered_list = ordered_ts.toList(n)
+        seq = ee.List.sequence(0, n.subtract(1))
+        def create(position, ini):
+            ini = ee.List(ini)
+            nextt = ee.Number(position).add(1)
+            start = ee.Image.constant(ee.Number(position))
+            end = ee.Image.constant(nextt)
+            sli = ltr.arraySlice(1, start.toInt(), end.toInt(), 1)
+
+            # CONVERT ARRAY TO IMG
+            imgIndx = sli.arrayProject([0]).arrayFlatten(
+                [["year", self.index, self.index + "_fit", "bkp"]])
+
+            date = ee.Image(ordered_list.get(position)).date().millis()
+            result = imgIndx.addBands(rmse).set('system:time_start', date)
+            return ini.add(result)
+        collist = ee.List(seq.iterate(create, ee.List([])))
+        col = ee.ImageCollection(collist)
+
+        return col
+
+    def breakdown_(self):
+        """
+        DEPRECATED
+
+        This method breaks down the resulting array and returns a list of
         images
 
         :return: A python list of images with the given bands:
@@ -474,9 +518,10 @@ class LandTrendr(object):
         """
 
         # APLICO LANDTRENDR
-        listaImgsPy = self.breakdown()
-        listaImgs = ee.List(listaImgsPy)  # ee.List
-        colLTR = ee.ImageCollection(listaImgs)  # ee.ImageCollection
+        #listaImgsPy = self.breakdown()
+        #listaImgs = ee.List(listaImgsPy)  # ee.List
+        #colLTR = ee.ImageCollection(listaImgs)  # ee.ImageCollection
+        colLTR = self.breakdown()
 
         def addTime(img):
             """ Pass system:time_start property """
