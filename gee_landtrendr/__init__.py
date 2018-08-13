@@ -13,7 +13,7 @@ __title__ = "gee-landtrendr"
 __summary__ = "Apply LandTrendr Algorithm in Google Earth Engine time series"
 __uri__ = ""
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 __author__ = "Rodrigo E. Principe"
 __email__ = "rprincipe@ciefap.org.ar"
