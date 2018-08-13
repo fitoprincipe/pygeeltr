@@ -11,6 +11,7 @@ import ee
 # Initialize EE if not initialized
 if not ee.data._initialized: ee.Initialize()
 
+
 def statistics(collection, band=None, suffix='_fit'):
     """ Compute sum of squares and R2 for values of every pixel in a
     ImageCollection that has already be fitted
@@ -100,48 +101,52 @@ class LandTrendr(object):
     segments, and the 4th row contains a 1 if the corresponding point
     was used as a segment vertex or 0 if not.
 
-    Argumentos:
+      **Parameters:**
 
-    OBLIGATORIOS:
+    - timeSeries (ImageCollection):
 
-    timeSeries (ImageCollection):
-    Collection from which to extract trends (it's assumed thateach
-    image in the collection represents one year). The first band is
-    usedto find breakpoints, and all subsequent bands are fitted
-    using those breakpoints.
+      Collection from which to extract trends (it's assumed thateach
+      image in the collection represents one year). The first band is
+      usedto find breakpoints, and all subsequent bands are fitted
+      using those breakpoints.
 
-    index (str):
-    nombre del index que se utiliza para hacer la regresion
+    - index (str):
 
-    OPCIONALES:
-    maxSegments (Integer):
-    Maximum number of segments to be fitted on the time series.
+      band to use for regression
 
-    spikeThreshold (Float, default: 0.9):
-    Threshold for dampening the spikes (1.0 means no dampening).
+      **Optionals:**
 
-    vertexCountOvershoot (Integer, default: 3):
-    The inital model can overshoot the maxSegments + 1 vertices by this
-    amount. Later, it will be prunned down to maxSegments + 1.
+    - maxSegments (Integer):
 
-    preventOneYearRecovery (Boolean, default: false):
-    Prevent segments that represent one year recoveries.
+      Maximum number of segments to be fitted on the time series.
 
-    recoveryThreshold (Float, default: 0.25):
-    If a segment has a recovery rate faster than 1/recoveryThreshold
-    (in years), then the segment is disallowed.
+    - spikeThreshold (Float, default: 0.9):
 
-    pvalThreshold (Float, default: 0.1):
-    If the p-value of the fitted model exceeds this threshold, then the
-    current model is discarded and another one is fitted using the
-    Levenberg-Marquardt optimizer.
+      Threshold for dampening the spikes (1.0 means no dampening).
 
-    bestModelProportion (Float, default: 1.25):
-    Takes the model with most vertices that has a p-value that is at
-    most this proportion away from the model with lowest p-value.
+    - vertexCountOvershoot (Integer, default: 3):
 
-    minObservationsNeeded (Integer, default: 6):
-    Min observations needed to perform output fitting.
+      The inital model can overshoot the maxSegments + 1 vertices by this
+      amount. Later, it will be prunned down to maxSegments + 1.
+
+    - preventOneYearRecovery (Boolean, default: false):
+      Prevent segments that represent one year recoveries.
+
+    - recoveryThreshold (Float, default: 0.25):
+      If a segment has a recovery rate faster than 1/recoveryThreshold
+      (in years), then the segment is disallowed.
+
+    - pvalThreshold (Float, default: 0.1):
+      If the p-value of the fitted model exceeds this threshold, then the
+      current model is discarded and another one is fitted using the
+      Levenberg-Marquardt optimizer.
+
+    - bestModelProportion (Float, default: 1.25):
+      Takes the model with most vertices that has a p-value that is at
+      most this proportion away from the model with lowest p-value.
+
+    - minObservationsNeeded (Integer, default: 6):
+      Min observations needed to perform output fitting.
     """
 
     def __init__(self, timeserie, index, area=None, **kwargs):
@@ -159,10 +164,10 @@ class LandTrendr(object):
         self.bestModelProportion = kwargs.get("bestModelProportion", 1.25)
         self.minObservationsNeeded = kwargs.get("minObservationsNeeded", 6)
 
-        # PROPIEDADES CONSTANTES
+        # Axes
         self.year_axis = 1
         self.band_axis = 0
-        self.col_size = tools.execli(self.timeSeries.size().getInfo)()
+        # self.col_size = tools.execli(self.timeSeries.size().getInfo)()
 
         if area:
             self.area = area
@@ -233,53 +238,53 @@ class LandTrendr(object):
 
         :year_list: list of millisecond dates (ee.List)
         """
-        if self.col_size > 1:  # 1 Request
+        # if self.col_size > 1:  # 1 Request
 
-            # Select the index band only (example: 'nbr') in the whole collection
-            timeserie_index = self.timeSeries.select(self.index)
+        # Select the index band only (example: 'nbr') in the whole collection
+        timeserie_index = self.timeSeries.select(self.index)
 
-            img = ee.Algorithms.TemporalSegmentation.LandTrendr(
-                timeSeries=timeserie_index,
-                # self.timeSeries,
-                maxSegments=self.maxSegments,
-                spikeThreshold=self.spikeThreshold,
-                vertexCountOvershoot=self.vertexCountOvershoot,
-                preventOneYearRecovery=self.preventOneYearRecovery,
-                recoveryThreshold=self.recoveryThreshold,
-                pvalThreshold=self.pvalThreshold,
-                bestModelProportion=self.bestModelProportion,
-                minObservationsNeeded=self.minObservationsNeeded)
+        img = ee.Algorithms.TemporalSegmentation.LandTrendr(
+            timeSeries=timeserie_index,
+            # self.timeSeries,
+            maxSegments=self.maxSegments,
+            spikeThreshold=self.spikeThreshold,
+            vertexCountOvershoot=self.vertexCountOvershoot,
+            preventOneYearRecovery=self.preventOneYearRecovery,
+            recoveryThreshold=self.recoveryThreshold,
+            pvalThreshold=self.pvalThreshold,
+            bestModelProportion=self.bestModelProportion,
+            minObservationsNeeded=self.minObservationsNeeded)
 
-            def anioslist(img, listanios):
-                time = ee.Date(img.get("system:time_start")).millis()
-                return ee.List(listanios).add(time)
+        '''
+        def anioslist(img, listanios):
+            time = ee.Date(img.get("system:time_start")).millis()
+            return ee.List(listanios).add(time)
 
-            anios = ee.List(self.timeSeries.iterate(anioslist, ee.List([])))
+        anios = ee.List(self.timeSeries.iterate(anioslist, ee.List([])))
 
-            core = namedtuple("CORE", ["result", "year_list"])
+        core = namedtuple("CORE", ["result", "year_list"])
 
-            return core(result=img, year_list=anios)
-        else:
-            raise ValueError("The time serie must have more than 1 image")
+        return core(result=img, year_list=anios)
+        # else:
+        #     raise ValueError("The time serie must have more than 1 image")
+        '''
+        return img
 
     def breakdown(self):
         ''' This method breaks down the resulting array and returns a list of
         images
 
-        :return: A python list of images with the given bands:
-
+        returns an ImageCollection in which each image has the following bands:
             - year = image's year
-
             - {ind} = index (ndvi, evi, etc)
-
             - {ind}_fit = index ajustado
-
             - bkp = breakpoint (1: yes, 0: no).
 
         It assumes that each image in the collection represents only one year
         of the time series
         '''
-        core = self.CORE().result
+        # core = self.CORE().result
+        core = self.CORE()
         ltr = core.select('LandTrendr')
         rmse = core.select('rmse')
         n = self.timeSeries.size()
@@ -305,186 +310,10 @@ class LandTrendr(object):
 
         return col
 
-    def breakdown_(self):
-        """
-        DEPRECATED
-
-        This method breaks down the resulting array and returns a list of
-        images
-
-        :return: A python list of images with the given bands:
-
-            - year = image's year
-
-            - {ind} = index (ndvi, evi, etc)
-
-            - {ind}_fit = index ajustado
-
-            - bkp = breakpoint (1: yes, 0: no).
-
-            NO 5+. banda_aj = (nombre de la banda) ajustado. ej: SWIR_aj
-        :rtype: list
-        """
-
-        # Get result and year list from the core method
-        img = self.CORE().result
-        years = self.CORE().year_list
-
-        if img is not None:
-
-            # band names
-            bandas = img.bandNames()
-
-            # OPCION 2
-            # CREA UNA LISTA CON EL NOMBRE DE LAS BANDAS
-            infobandas = tools.execli(bandas.getInfo)()
-            # bandasN = funciones.decode_list(infobandas)  # 2 req
-            bandasN = infobandas
-
-            # SELECT LANDTRENDR BAND
-
-            # trend = img.select([bandas.get(0)]) # ESTO FUNCIONABA
-            trend = img.select(bandasN[0])  # ESTO FUNCIONA
-
-            # PARA CADA IMG DE LA COLECCION
-
-            listaImgs = []
-
-            for indx in range(0, self.col_size):
-                # CORTO EL ARRAY EN EL EJE anios, EL AÑO = indx
-                imgIndx = trend.arraySlice(self.year_axis, indx, indx + 1)
-
-                # CONVIERTO EL ARRAY A UNA IMG CON BANDAS
-                imgIndx = imgIndx.arrayProject([0]).arrayFlatten(
-                    [["year", self.index, self.index + "_fit", "bkp"]])
-
-                # SUMA UNO A LA BANDA anio PORQUE LANDTRENDR RESTA UNO
-                # IMPORTANTE! : LA BANDA anio PASA AL FINAL
-                suma = ee.Image.constant(1).select([0],["year"])
-                newanio = imgIndx.select("year").add(suma)
-
-                imgIndx = tools.replace(imgIndx, "year", newanio)
-
-                # PARA CADA BANDA DE LA IMG OBTENGO LOS VALORES AJUSTADOS
-
-                sts = ee.Date(years.get(indx))
-
-                # LE AGREGO LA PROPIEDAD system:time_start
-                # print "238. system:time_start", date
-                imgIndx = imgIndx.set("system:time_start", sts.millis())
-
-                # print "miliseg", sts.millis().getInfo()
-                # print "año", anios.get(indx)
-
-                # UNA VEZ Q TENGO LA IMG FINAL LA AGREGO A UNA LISTA
-                listaImgs.append(imgIndx)
-
-            return listaImgs
-
-    def extract_values_at(self, point):
-        """ Dado un *punto* este metodo extre los valores del index, index
-        ajustado y año de toda la serie temporal
-
-        :param point: el punto del cual se quiere extraer la informacion
-        :type point: ee.Geometry.Point
-
-        :return: listaVal, listaValFit, listaAnios
-
-            **listaVal:** lista de valores del index
-
-            **listaValFit:** lista de valores del index ajustado por LandTrendr
-
-            **listaAnios:** lista de años
-        :rtype: tuple
-        """
-        # APLICO LANDTRENDR
-        # img, anios = self.CORE()
-        img = self.CORE().result
-        anios = self.CORE().year_list
-
-        # EXTRAIGO LA INFO DEL PUNTO
-        extracto = tools.execli(img.reduceRegion(ee.Reducer.first(), point, 30).getInfo)()
-
-        indice = extracto["LandTrendr"][1]
-        indice_fit = extracto["LandTrendr"][2]
-        anios = extracto["LandTrendr"][0]
-        aniosPy = []
-
-        # AUMENTO EL AÑO EN 1
-        for anio in anios:
-            aniosPy.append(anio + 1)
-
-        return indice, indice_fit, aniosPy
-
-    def point_to_dict(self, point):
-        ''' '''
-        pass
-
     def statistics(self):
+        """ Compute statistics for this object """
         collection = self.slope()
         return statistics(collection, self.index)
-
-    def statistics_array(self):
-        """ Residual sum of square and coefficient of determination over
-        LandTrendR fit curves
-
-        :return:
-            :ssres: residual sum of square in an ee.Image
-            :r2: coefficient of determination (r2)
-        :rtype: namedtuple
-        """
-        # APLICO LANDTRENDR
-        # img, anios = self.CORE()
-        img = self.CORE().result
-        anios = self.CORE().year_list
-
-        img = img.select("LandTrendr")
-
-        # OBTENGO LOS VALORES (ARRAYS)
-        ind1 = img.arraySlice(0, 1, 2)
-        fit1 = img.arraySlice(0, 2, 3)
-
-        # COMPUTO LA MEDIA DEL INDICE Y LA REPITO PARA QUE SEA UN ARRAY DEL
-        # MISMO TAMAÑO
-        media = (ind1.arrayReduce(ee.Reducer.mean(), [1])
-                 .arrayRepeat(1, ind1.arrayLength(1)))
-
-        # SUMATORIA DE (index - media)**2 Y LO REPITO PARA QUE SEA UN ARRAY
-        #  DEL MISMO TAMAÑO
-        sstot = (ind1.subtract(media).pow(2)
-                 .arrayReduce(ee.Reducer.sum(), [1])
-                 .arrayRepeat(1, ind1.arrayLength(1)))
-
-        # SUMATORIA DE (index ajustado - media)**2 Y LO REPITO PARA QUE SEA
-        #  UN ARRAY DEL MISMO TAMAÑO
-        ssreg = (fit1.subtract(media).pow(2)
-                 .arrayReduce(ee.Reducer.sum(), [1])
-                 .arrayRepeat(1, ind1.arrayLength(1)))
-
-        # SUMATORIA DE (index - index ajustado)**2 Y LO REPITO PARA QUE
-        # SEA UN ARRAY DEL MISMO TAMAÑO
-        ssres0 = ind1.subtract(fit1).pow(2).arrayReduce(ee.Reducer.sum(), [1])
-        ssres = ssres0.arrayRepeat(1, ind1.arrayLength(1))
-
-        # CREO UN ARRAY CON TANTOS UNOS COMO EL TAMAÑO DEL ARRAY DE INDICES
-        arr1 = ee.Image(1).toArray().arrayRepeat(1, ind1.arrayLength(1))
-
-        # DIVIDO
-        division = ssres.divide(sstot)
-
-        # A 1 LE RESTO LA DIVISION Y OBTENGO R2
-        r2 = arr1.subtract(division)
-
-        # CONVIERTO EN IMAGENES
-        imgR2 = r2.arrayReduce(ee.Reducer.first(), [1]).arrayProject(
-            [0]).arrayFlatten([["r2"]])
-
-        imgssres = ssres.arrayReduce(ee.Reducer.first(), [1]).arrayProject(
-            [0]).arrayFlatten([["ssres"]])
-
-        resultado = namedtuple("Statistics", ["ssres", "r2"])
-
-        return resultado(imgssres, imgR2)
 
     def slope(self):
         """ Calculate slope of each segment in the LandTrendR fit
@@ -492,26 +321,18 @@ class LandTrendr(object):
         Use:
         LandTrendr(imgcol, maxSegment, index, **kwargs).slope()
 
-        :return: Each image in the collection contains the following bands:
-
-            **0 index**: original index
-
-            **1 {index}_fit**: fitted index (example, ndvi_fit)
-
-            **2 bkp**: breakpoint (1 change, 0 no change)
-
-            **3 year**: image's year
-
-            **4 slope_before**: banda que contiene el slope del tramo anterior al
-                año. Si *a1* es el año central, *dif_at = a1-a0*
-
-            **5 slope_after**: banda que contiene el slope del tramo posterior
-                al año. Si *a1* es el año central, *dif_ad = a2-a1*
-
-            **6 change**: change's magnitud
-                (between -1 (greater loose) and 1 (greater gain))
-
-            **7 angle**: change's angle in radians
+        Each image in the collection contains the following bands:
+            - [0] index: original index
+            - [1] {index}_fit: fitted index (example, ndvi_fit)
+            - [2] bkp: breakpoint (1 change, 0 no change)
+            - [3] year: image's year
+            - [4] slope_before: slope of the segment 'before'. If *a1*
+              is the main year, *slope_before = a1-a0*
+            - [5] slope_after: slope of the segment 'after'. If *a1* is the
+              main year, *slope_after = a2-a1*
+            - [6] change: change's magnitud
+              (between -1 (greater loose) and 1 (greater gain))
+            - [7] angle: change's angle in radians
 
         :rtype: ee.ImageCollection
 
@@ -691,488 +512,6 @@ class LandTrendr(object):
 
         return newCol
 
-    def class1(self, umb_b=0.01, umb_m=0.05):
-        """ Método para aplicar una clasificación al resultado de LandTendr
-
-        :Parametros:
-        :param umb_b: umbral para determinar el atributo "bajo", el cual
-            va entre 0 y este umbral
-        :type umb_b: float
-        :param umb_m: umbral para determinar los atributos "moderado" y
-            "alto", los cuales van entre umb_bajo y umb_mod, y mayor a umb_mod
-            respectivamente
-        :type umb_m: float
-
-        :return: Una coleccion de imagenes, donde cada imagen tiene una
-            banda de nombre "cat", que contiene la categoría, a saber:
-
-            * cat 1: sin grandes cambios (azul)
-
-            * cat 2: perdida suave (naranja)
-
-            * cat 3: perdida alta (rojo)
-
-            * cat 4: ganancia (o recuperacion) suave (amarillo)
-
-            * cat 5: ganancia alta (verde)
-
-            * y tres bandas para la visualizacion
-        :rtype: ee.ImageCollection
-        """
-
-        col = self.slope()
-
-        def categoria(img):
-            d = img.get("system:time_start")
-            adelante = ee.String("slope_after")
-            atras = ee.String("slope_before")
-
-            umb_bajo = ee.Image.constant(umb_b)
-            umb_mod = ee.Image.constant(umb_m)
-
-            at = ee.Image(img).select(atras)
-            atAbs = at.abs()
-
-            ad = ee.Image(img).select(adelante)
-            adAbs = ad.abs()
-
-            # INTENSIDAD QUIEBRE
-            dif = ad.subtract(at)
-            media = atAbs.add(adAbs).divide(2)
-
-            # DIRECCION
-            at_dec = at.lte(0)  # atras decreciente?
-            at_crec = at.gt(0)  # atras creciente?
-
-            ad_dec = ad.lte(0)  # adelante decreciente?
-            ad_crec = ad.gt(0)  # adelante creciente?
-
-            # OTRA OPCION DE CATEGORIAS
-
-            # INTENSIDAD
-
-            difAbs = dif.abs()
-
-            menor_bajo = difAbs.lt(umb_bajo)
-            menor_mod = difAbs.lt(umb_mod)
-            mayor_bajo = difAbs.gte(umb_bajo)
-            mayor_mod = difAbs.gte(umb_mod)
-
-            int_baja = menor_bajo
-            int_mod = mayor_bajo.And(menor_mod)
-            int_alta = mayor_mod
-
-            # int_baja = dif.abs().lt(umb_bajo)
-            # int_mod = dif.abs().lt(umb_mod).And(dif.gte(umb_bajo))
-            # int_alta = dif.abs().gte(umb_mod)
-
-            cat1 = int_baja  # sin grandes cambios
-            cat2 = int_mod.And(dif.lte(0))  # perdida suave
-            cat3 = int_alta.And(dif.lte(0))  # perdida alta
-            cat4 = int_mod.And(dif.gt(0))  # ganancia suave
-            cat5 = int_alta.And(dif.gt(0))  # ganancia alta
-
-            # ESCALO
-            cat2 = cat2.multiply(2)
-            cat3 = cat3.multiply(3)
-            cat4 = cat4.multiply(4)
-            cat5 = cat5.multiply(5)
-
-            final = cat1.add(cat2).add(cat3).add(cat4).add(cat5)
-
-            img = img.addBands(
-                ee.Image(final).select([0], ["cat"])).addBands(
-                ee.Image(at_dec).select([0], ["at_dec"])).addBands(
-                ee.Image(at_crec).select([0], ["at_crec"])).addBands(
-                ee.Image(ad_dec).select([0], ["ad_dec"])).addBands(
-                ee.Image(ad_crec).select([0], ["ad_crec"])).addBands(
-                ee.Image(dif).select([0], ["dif"]))
-
-            mask = img.neq(0)
-
-            return img.updateMask(mask).set("system:time_start", d)
-
-        col = col.map(categoria)
-
-        # VISUALIZACION DE IMG
-        r = ee.String("viz-red")
-        g = ee.String("viz-green")
-        b = ee.String("viz-blue")
-
-        def viz(imagen):
-            d = imagen.get("system:time_start")
-            img = ee.Image(imagen)
-
-            '''
-                R     G     B
-            1   50,   25,   255   azul
-            2   255,  100,  50    naranja
-            3   255,  25,   25    rojo
-            4   255,  255,  50    amarillo
-            5   50,   150,  50    verde
-            '''
-
-            cat1 = img.eq(1)
-            r1 = cat1.multiply(50)
-            g1 = cat1.multiply(25)
-            b1 = cat1.multiply(255)
-
-            cat2 = img.eq(2)
-            r2 = cat2.multiply(255)
-            g2 = cat2.multiply(100)
-            b2 = cat2.multiply(50)
-
-            cat3 = img.eq(3)
-            r3 = cat3.multiply(255)
-            g3 = cat3.multiply(25)
-            b3 = cat3.multiply(25)
-
-            cat4 = img.eq(4)
-            r4 = cat4.multiply(255)
-            g4 = cat4.multiply(255)
-            b4 = cat4.multiply(50)
-
-            cat5 = img.eq(5)
-            r5 = cat5.multiply(50)
-            g5 = cat5.multiply(150)
-            b5 = cat5.multiply(50)
-
-            red = r1.add(r2).add(r3).add(r4).add(r5).select([0], [r]).toUint8()
-
-            green = (g1.add(g2).add(g3).add(g4).add(g5)
-                     .select([0], [g]).toUint8())
-
-            blue = (b1.add(b2).add(b3).add(b4).add(b5)
-                    .select([0], [b]).toUint8())
-
-            return img.addBands(ee.Image([red, green, blue])).set(
-                "system:time_start", d)
-
-        col = col.select("cat").map(viz)
-
-        return col
-
-    def classIncendio(self, umbral=0.05, agrupar=False):
-        """ Método para aplicar una clasificación al resultado de LandTendr
-
-        :parameter:
-        :param umbral: umbra para |pendiente_posterior - pendiente_anterior|
-            si pasa este umbral se considera 'cambio'
-        :type umbral: float
-
-        :param agrupar: agrupar pixeles
-        :type agrupar: bool
-
-        :return: Una coleccion de imagenes, donde cada imagen tiene una banda de
-            nombre 'cat', que contiene la categoría, a saber:
-
-            **cat 0**: No incendio
-
-            **cat 1**: posible incendio (perdida y ganancia)
-
-            **cat 2**: posible incendio (solo ganancia)
-
-            tres bandas para la visualizacion y una banda para la intensidad
-            denominada "int"
-        :rtype: ee.ImageCollection
-
-        """
-        col = self.slope()
-
-        def categoria(img):
-            d = img.get("system:time_start")
-
-            adelante = ee.String("slope_after")
-            atras = ee.String("slope_before")
-
-            indice = ee.Image(img).select(self.index + "_fit")
-            umb = ee.Image.constant(umbral)
-
-            # CREO UNA BANDA PARA EL AÑO
-            t = ee.Date(ee.Image(img).get("system:time_start")).get("year")
-            anio = ee.Image.constant(t).select([0], ["anio"])
-
-            at = ee.Image(img).select(atras)
-            # atAbs = at.abs()
-
-            ad = ee.Image(img).select(adelante)
-            # adAbs = ad.abs()
-
-            indice_ad = indice.add(ad)
-            # indice_at = index.add(at)
-
-            # indice_dif = indice_ad.subtract(index)
-            indice_dif = indice_ad.subtract(
-                indice)  # .abs().divide(ee.Image.constant(500))
-
-            # INTENSIDAD QUIEBRE
-            dif = ad.subtract(at)
-            # media = atAbs.add(adAbs).divide(2)
-
-            # DIRECCION
-            at_dec = at.lte(0)  # atras decreciente?
-            at_crec = at.gt(0)  # atras creciente?
-
-            ad_dec = ad.lte(0)  # adelante decreciente?
-            ad_crec = ad.gt(0)  # adelante creciente?
-
-            # OTRA OPCION DE CATEGORIAS
-
-            # INTENSIDAD
-
-            difAbs = dif.abs()
-
-            mayor_mod = difAbs.gte(umb)
-
-            int_alta = mayor_mod
-
-            perdida_alta = int_alta.And(dif.lte(0))  # perdida alta (pa)
-            ganancia_alta = int_alta.And(dif.gt(0))  # ganancia alta (ga)
-
-            pa_img = ee.Image(perdida_alta).select([0], ["pa"])
-            ga_img = ee.Image(ganancia_alta).select([0], ["ga"])
-            ind_dif_img = ee.Image(indice_dif).select([0], ["indice_dif"])
-
-            img = img.addBands(pa_img).addBands(ga_img).addBands(
-                ind_dif_img).addBands(anio)
-
-            # mask = img.neq(0)
-
-            return img.set("system:time_start", d)  # .updateMask(mask)
-
-        col = col.map(categoria)
-
-        colL = col.toList(50)
-        s = tools.execli(colL.size().getInfo)()
-        newCol = ee.List([])
-
-        # ARMO LAS CATEGORIAS TENIENDO EN CUENTA LO QUE SUCEDE ANTES
-        # Y DESPUES DEL AÑO EN ANALISIS
-        for i in range(0, s):
-
-            ''' ASI ANDA, PRUEBO OTRA COSA Y SINO LO VUELVO A ESTA VER
-            img1 = ee.Image(colL.get(i))
-            a1 = img1.select("year")
-            pa1 = img1.select("pa")
-            ga1 = img1.select("ga")
-            dif1 = img1.select("indice_dif")	
-            
-            if (i < s-1):
-                img2 = ee.Image(colL.get(i+1))
-                a2 = img2.select("year")
-                pa2 = img2.select("pa")
-                ga2 = img2.select("ga")
-                dif2 = img2.select("indice_dif")
-            elif (i == s-1):
-                # cat 1
-                inc = pa1
-                cat1 = inc
-                
-            if (i < s-2):
-                img3 = ee.Image(colL.get(i+2))			
-                
-                a3 = img3.select("year")							
-                pa3 = img3.select("pa")
-                ga3 = img3.select("ga")
-                dif3 = img3.select("indice_dif")
-                
-                # cat 1
-                inc1 = pa1.And(ga2)
-                inc2 = pa1.And(ga3)
-                inc = inc1.Or(inc2)
-                cat1 = inc
-                
-                # cat 2
-                noinc1 = pa1.eq(0) # en la actual no hay perdida
-                noinc0 = 
-                cat2 = noinc1.And(ga2)
-                cat2 = cat2.multiply(ee.Image.constant(2))
-                
-            elif (i == s-2):
-                # cat 1
-                inc = pa1.And(ga2)				
-                cat1 = inc
-                
-                # cat 2
-                noinc1 = pa1.eq(0)
-                cat2 = noinc1.And(ga2)
-                cat2 = cat2.multiply(ee.Image.constant(2))
-            '''
-            img1 = ee.Image(colL.get(i))
-            d = img1.get("system:time_start")
-            a1 = img1.select("year")
-            pa1 = img1.select("pa")
-            ga1 = img1.select("ga")
-            dif1 = img1.select("indice_dif")
-
-            # EN TODAS LAS IMG EXCEPTO LA PRIMERA, OBTENGO LOS DATOS DE
-            # LA IMAGEN ANTERIOR (i-1)
-            if i > 0:
-                img0 = ee.Image(colL.get(i - 1))
-                a0 = img0.select("year")
-                pa0 = img0.select("pa")
-                ga0 = img0.select("ga")
-                dif0 = img0.select("indice_dif")
-
-            # EN TODAS LAS IMG EXCEPTO LA ULTIMA, OBTENGO LOS DATOS DE
-            # LA IMAGEN SIGUIENTE (i+1)
-            if i < s - 1:
-                img2 = ee.Image(colL.get(i + 1))
-                a2 = img2.select("year")
-                pa2 = img2.select("pa")
-                ga2 = img2.select("ga")
-                dif2 = img2.select("indice_dif")
-
-            # EN TODAS LAS IMG EXCEPTO LAS ULTIMAS 2, OBTENGO LOS DATOS DE
-            # LA IMAGEN SUB SIGUIENTE (i+2)
-            if i < s - 2:
-                img3 = ee.Image(colL.get(i + 2))
-
-                a3 = img3.select("year")
-                pa3 = img3.select("pa")
-                ga3 = img3.select("ga")
-                dif3 = img3.select("indice_dif")
-
-            # ARMO LAS CATEGORIAS
-
-            # EN LA PRIMER IMAGEN
-            if i == 0:
-                # 1 GANANCIA EN SIGUIENTE
-                cond1 = ga2
-
-                # 2 NADA EN EL SIGUIENTE, GANANCIA EN SUBSIGUIENTE
-                # sin_perd_sig = pa2.Not()
-                # cond2 = ga3.And(sin_perd_sig)
-
-                cat2 = cond1  # .Or(cond2)
-
-                cat1 = pa1
-
-            # DE LA SEGUNDA A LA ANTEPENULTIMA
-            if (i > 0) and (i < s - 2):
-                # NADA SIGUIENTE
-                sin_gan_sig = ga2.Not()
-                sin_perd_sig = pa2.Not()
-                nada_sig = sin_gan_sig.And(sin_perd_sig)
-
-                # NADA ANTERIOR
-                sin_gan_ant = ga0.Not()
-                sin_perd_ant = pa0.Not()
-                nada_ant = sin_gan_ant.And(sin_perd_ant)
-
-                # NADA AHORA
-                sin_gan = ga1.Not()
-                sin_perd = pa1.Not()
-                nada = sin_gan.And(sin_perd)
-
-                # CAT 1
-
-                # 1 PERDIDA SEGUIDA DE GANANCIA
-                cond1 = pa1.And(ga2)
-
-                # 2 PERDIDA SEGUIDA DE NADA, SEGUIDA DE GANANCIA
-                cond2 = pa1.And(nada_sig).And(ga3)
-
-                cat1 = cond1.Or(cond2)
-
-                # CAT 2
-                # 1 NADA ANTES, NADA AHORA Y GANANCIA SIGUIENTE
-                cat2 = nada_ant.And(nada).And(ga2)
-
-            # EN LA ANTEULTIMA
-            if i == s - 2:
-                cond1 = pa1.And(ga2)
-                cat1 = cond1
-
-                cond3 = pa0.Or(pa1).Not()
-                cond4 = ga2.And(cond3)
-                cat2 = cond4
-
-            cat2 = cat2.multiply(ee.Image.constant(2))
-
-            final = cat1.add(cat2)
-            img1 = img1.addBands(ee.Image(final).select([0], ["cat"]))
-            img1 = img1.set("system:time_start", d)
-            newCol = newCol.add(img1)
-
-        col = ee.ImageCollection(newCol)
-
-        def viz(img0):
-            d = img0.get("system:time_start")
-
-            imagen = ee.Image(img0).select("cat")
-            img = ee.Image(imagen)
-
-            indice = ee.Image(img0).select(self.index + "_fit")
-            dif = ee.Image(img0).select("indice_dif")
-            difA = ee.Image(dif).abs()
-            fact = difA.divide(indice)
-
-            # VISUALIZACION DE IMG
-            r = ee.String("viz-red")
-            g = ee.String("viz-green")
-            b = ee.String("viz-blue")
-            '''
-                R     G     B
-            1   255,  25,   25    rojo
-            2   255,  100,  50    naranja
-            '''
-
-            cat1 = img.eq(1)
-            r1 = cat1.multiply(255)
-            g1 = cat1.multiply(25)
-            b1 = cat1.multiply(25)
-
-            cat2 = img.eq(2)
-            r2 = cat2.multiply(255)
-            g2 = cat2.multiply(100)
-            b2 = cat2.multiply(50)
-
-            red = r1.add(r2).select([0], [r]).toUint8()
-            green = g1.add(g2).select([0], [g]).toUint8()
-            blue = b1.add(b2).select([0], [b]).toUint8()
-
-            return img.addBands(ee.Image([red, green, blue])).set(
-                "system:time_start", d)
-
-        col = col.map(viz)
-
-        if agrupar is False:
-            return col
-        else:
-            def agrupando(img):
-                d = ee.Date(img.get("system:time_start"))
-                cat = img.select("cat")
-
-                connected = img.toInt().connectedComponents(ee.Kernel.plus(1),
-                                                            8).reproject(
-                    ee.Projection('EPSG:4326'), None, 30)
-                conn2 = connected.mask().select("labels")
-                holes = conn2.gt(cat)
-                islas = cat.gt(conn2)
-                objetos = holes.add(islas)
-
-                kernel = ee.Kernel.plus(1, "pixels", False)
-                reducer = ee.Reducer.countDistinct()
-
-                vecinos = (objetos.select(0)
-                          .reduceNeighborhood(reducer, kernel, "kernel", False)
-                          .reproject(ee.Projection('EPSG:4326'), None, 30))
-
-                objNot = objetos.eq(0)
-
-                final = objNot.Not().reduceNeighborhood(ee.Reducer.max(),
-                                                        kernel).reproject(
-                    ee.Projection('EPSG:4326'), None, 30)
-
-                final = final.set("system:time_start", d)
-
-                return final
-
-            col = col.map(agrupando)
-
-            return col
-
     def total_bkp(self, collection=None):
         """ Compute the total number of breakpoint in each pixel
 
@@ -1186,145 +525,6 @@ class LandTrendr(object):
         col = collection if collection else self.slope()
         sum_bkp = ee.Image(col.select("bkp").sum()).select([0], ["total_bkp"])
         return sum_bkp
-
-    def stable_pixels(self, threshold=0.02):
-        """ Generate a stable pixels throughout the year image
-
-        :param threshold: value that divides 'change' of 'no change'.
-            Defualt: 0.02
-        :return: A 8-bits Image with the following bands:
-
-            :cat: pixel's category. Categories are:
-
-            - 1: neutral trend (nor gain neither loss)
-            - 2: positive trend (gain)
-            - 3: negative trend (loss)
-
-            :viz-red: 8-bits band for category 1
-            :viz-green: 8-bits band for category 2
-            :viz-blue: 8-bits band for category 3
-        """
-
-        col = self.slope()
-
-        # imagen suma de breakpoints
-        suma = self.total_bkp(col)
-
-        # sort the collection ascending
-        col = col.sort('system:time_start')
-
-        # BANDA indice_fit DE LA PRIMER IMG DE LA COL
-        primera = (ee.Image(col.first())
-                     .select(self.index + "_fit"))
-
-        ultima = (ee.Image(col.sort('system:time_start', False).first())
-                    .select(self.index+'_fit'))
-
-        # OBTENGO LA PENDIENTE GENERAL RESTANDO EL INDICE AL FINAL MENOS
-        # EL INDICE INICIAL
-        slope_global = (ee.Image(ultima.subtract(primera))
-                        .select([0], ["slope"]))
-
-        # CREO LA IMG CON EL UMBRAL
-        umb_est = ee.Image.constant(threshold)
-
-        # CREO UNA IMAGEN DE ceros Y CAMBIO EL NOMBRE DE LA BANDA A "bkps"
-        ini = ee.Image(0).select([0], ["bkps"])
-
-        # CREO UNA IMG DONDE LOS PIXELES EN LOS QUE
-        # |slope_after - slope_before| >= umbral
-        # SON unos SINO ceros
-        def breakpoints(img, inicial):
-            # casteo la imagen inicial
-            inicial = ee.Image(inicial)
-
-            # obtengo el valor absoluto del slope
-            adelante = img.select("slope_after")  # .abs()
-            atras = img.select("slope_before")  # .abs()
-            dif = adelante.subtract(atras).abs()
-
-            # creo una imagen binaria
-            # si el slope > umbral --> 1
-            # sino --> 0
-            cond = ee.Image(dif.gte(umb_est))
-
-            return inicial.add(cond)
-
-        bkpImg = ee.Image(col.iterate(breakpoints, ini))
-
-        # estableMask = bkpImg.updateMask(bkpImg.eq(0))
-
-        # DETERMINO LA MASCARA DE PIXELES ESTABLES
-        mask = bkpImg.eq(0)
-
-        # ENMASCARO LA IMAGEN DE slopes DEJANDO SOLO LOS ESTABLES
-        slope = slope_global.updateMask(mask)
-
-        # slope band to float
-        slope = slope.toFloat()
-
-        # DETERMINO UN FACTOR PARA CADA PIXEL
-        # DIVIDO POR 0.6 DEBIDO A QUE LA MAXIMA DIFERENCIA
-        # ESPERABLE (EN NDVI AL MENOS) ES DE 0.2 (SIN BOSQUE) A
-        # 0.8 (CON BOSQUE), LO QUE RESTADO DA 0.6
-        slope_fact = slope.abs().divide(0.6)  # .multiply(4)
-
-        # SIN CAMBIOS: PARA LOS QUE LA PENDIENTE DEL SLOPE SEA
-        # MENOR AL UMBRAL. QUEDA UNA IMAGEN BINARIA
-
-        estable = (slope.abs()
-                   .lte(threshold)
-                   .select([0], ["cat"])
-                   .toFloat())
-
-        # CRECIMIENTO: PARA LOS QUE LA PENDIENTE ES POSITIVA
-        # QUEDA UNA IMG BINARIA MULTIPLICADA X2
-        crecimiento = (ee.Image(slope.gte(threshold).multiply(2))
-                       .select([0], ["cat"])
-                       .toFloat())
-
-        # DECREMENTO: PARA LOS QUE LA PENDIENTE ES NEGATIVA
-        # QUEDA UNA IMG BINARIA MULTIPLICADA X3
-        decremento = (ee.Image(slope.lt(-threshold).multiply(3))
-                      .select([0], ["cat"])
-                      .toFloat())
-
-        # IMG CON LAS CATEGORIAS:
-        # 'SIN CAMBIO'  = 1
-        # 'CRECIMIENTO' = 2
-        # 'DECREMENTO'  = 3
-        categorias = estable.add(crecimiento).add(decremento)
-
-        # Category band to int 8
-        categorias = categorias.toInt8()
-
-        # COLORES
-        red = (ee.Image(slope.lt(0))  # IMG CON unos DONDE EL slope < 0
-               .multiply(255)  # MULTIPLICA x255
-               .multiply(slope_fact)  # MULTIPLICA x slope_fact
-               .select([0], ["viz-red"])  # RENOMBRA LA BANDA
-               # .toFloat())
-               .toInt8())
-
-        green = (ee.Image(slope.gte(0))
-                 .multiply(255)
-                 .multiply(slope_fact)
-                 .select([0], ["viz-green"])
-                 # .toFloat())
-                 .toInt8())
-
-        blue = (ee.Image(slope.eq(0))
-                .multiply(255)
-                .select([0], ["viz-blue"])
-                # .toFloat())
-                .toInt8())
-
-        final = (red.addBands(green)
-                 .addBands(blue)
-                 .addBands(categorias)
-                 .addBands(slope))
-
-        return final
 
     def stack(self):
         """ Generate an image holding the fitted index value for each year
@@ -1348,88 +548,16 @@ class LandTrendr(object):
 
         return imgF
 
-    def max_diff(self, category):
-        """ Generate an image with the maximum difference found
-
-        :param category: 2 or gain, 3 or loss
-
-        :return: an Image with the following bands:
-
-            :max_change: maximum change value (loss or gain)
-            :year: year that occur the max change
-        :rtype: ee.Image
-        """
-
-        segmentos = self.slope()
-        slope_before = segmentos.select("slope_before")
-        slope_after = segmentos.select("slope_after")
-        change = segmentos.select("change")
-
-        # Determino los pixeles que no contienen un breakpoint para
-        # enmascararlos
-        # estables, slope = self.stable_pixels()
-        # estables = slope.mask().Not()
-        estables_mask = self.stable_pixels().mask().Not().select([0])
-
-        # Agrego una banda con el año de la img
-        # y enmascaro todas las imgs con la mascara de no stable_pixels
-        def agregaFecha(img):
-            # mask = img.mask()
-            anio = ee.Date(img.get("system:time_start")).get("year")
-            imga = ee.Image(anio).select([0], ["year"]).toInt16()
-            return img.addBands(imga).updateMask(estables_mask)
-
-        # slope_before = slope_before.map(agregaFecha)
-        change = change.map(agregaFecha)  # .select("change")
-
-        # colL = slope_before.toList(50)
-        colL = change.toList(50)
-
-        # Primer imagen de la coleccion para la iteracion
-        primera = ee.Image(colL.get(0))
-
-        # Resto de la col para la iteracion
-        resto = colL.slice(1)
-
-        def maxima(img, first):
-
-            # Casts
-            img = ee.Image(img)
-            # imagen inicial (primer img de la col)
-            firstI = ee.Image(first)
-
-            # test img > img0?
-
-            if category == "loss" or category == 3:
-                test = img.select("change").lte(
-                    firstI.select("change"))  # binaria
-            elif category == "gain" or category == 2:
-                test = img.select("change").gte(
-                    firstI.select("change"))  # binaria
-
-            # reemplazo condicional
-
-            maxI = firstI.where(test, img)
-
-            # ENMASCARO LA IMAGEN CON LOS PIXELES QUE SE MANTIENEN
-            # ESTABLES A LO LARGO DE LA SERIE
-            # imgF = maxI.updateMask(stable_pixels)#.addBands(imgy)
-            return maxI
-
-        img = ee.Image(resto.iterate(maxima, primera))
-        # img = img.updateMask(stable_pixels)
-        return img
-
     def breakpoints(self):
         """ Number of breakpoints
 
-        :return: An object with 2 properties:
+        Return an object with 2 properties:
 
-            :image: ee.Image containing the following bands:
+        - image (ee.Image): ee.Image containing the following bands:
 
-                :**n_bkp**: number of breakpoints in each pixel
+          - n_bkp: number of breakpoints in each pixel
 
-            :total: maximum amount of breakpoints
+        - total (ee.Number): maximum amount of breakpoints
 
         :rtype: namedtuple
         """
@@ -1470,23 +598,29 @@ class LandTrendr(object):
     def break2band(self):
         """ Generate an image holding the data for each found breakpoint
 
-        :return: an Image with the following bands:
+        Return an Image with the following bands:
 
-            :year_{breakpoint}: year for each breakpoint. Number of breakpoints in
-                the whole image may differ from the number of breakpoints in
-                each pixel. Therefore, bands will correspond to breakpoint in
-                the whole image. Example:
-                bkps in the whole image: 5
-                bkps in one pixel: 3
-                values of bands in that pixel:
-                    year_1: 0
-                    year_2: 0
-                    year_3: 1999
-                    year_4: 2005
-                    year_5: 2017
-            :change_{id}: change value for each breakpoint
-            :backward_{id}: backward change value
-            :forward_{id}: forward change value
+        - year_{breakpoint}: year for each breakpoint. Number of breakpoints in
+          the whole image may differ from the number of breakpoints in
+          each pixel. Therefore, bands will correspond to breakpoint in
+          the whole image.
+
+            Example:
+
+            - bkps in the whole image: 5
+            - bkps in one pixel: 3
+            - values of bands in that pixel:
+
+              - year_1: 0
+              - year_2: 0
+              - year_3: 1999
+              - year_4: 2005
+              - year_5: 2017
+
+        - change_{id}: change value for each breakpoint
+        - backward_{id}: backward change value
+        - forward_{id}: forward change value
+
         :rtype: ee.Image
         """
         # APLICO LANDTRENDR
@@ -1611,26 +745,30 @@ class LandTrendr(object):
         :type min_threshold: float
         :param max_threshold: divides 'soft change' and 'steep change'
         :type max_threshold: float
-        :return: A new class called 'Stretches' with the following properties:
 
-            :img_list: a list of images containing the stretches. Example:
-                [img1stretch, img2stretches, img3stretches, img4stretches].
-                Each image has the following bands:
+        Return a new class called 'Stretches' with the following properties:
 
-                :t{n}_slope: slope of stretch n
-                :t{n}_duration: duration of stretch n (in years)
-                :t{n}_cat: category for stretch n
+        - img_list: a list of images containing the stretches.
 
-            :image: an image with unified results. Will have as many bands as
-                found stretches, times 3. In case stretches in one pixel are
-                less than stretches in the whole image, the last will be empty.
-                Example: The whole image has 4 stretches. The pixel that has 2
-                stretches will have the following values:
+          Each image has the following bands:
 
-                :t1_slope: value
-                :t2_slope: value
-                :t3_slope: 0
-                :t4_slope: 0
+            - t{n}_slope: slope of stretch n
+            - t{n}_duration: duration of stretch n (in years)
+            - t{n}_cat: category for stretch n
+
+        - image: an image with unified results. Will have as many bands as
+          found stretches, times 3. In case stretches in one pixel are
+          less than stretches in the whole image, the last will be empty.
+
+          Example:
+
+          The whole image has 4 stretches. The pixel that has 2
+          stretches will have the following values:
+
+            - t1_slope: value
+            - t2_slope: value
+            - t3_slope: 0
+            - t4_slope: 0
 
         :rtype: namedtuple
         """
@@ -1769,108 +907,3 @@ class LandTrendr(object):
         resultado = namedtuple("Stretches", ["img_list", "image"])
 
         return resultado(listaimg, img_final)
-
-    def classify(self, *args, **kwargs):
-        """ Clasificación de los tramos
-
-        :param args: Mismos argumentos que la función stretches()
-        :param kwargs: Mismos argumentos que la funcion stretches()
-        :return:
-        """
-
-        tramos = self.stretches(*args, **kwargs)
-        lista = tramos.img_list
-
-        umbral1 = kwargs.get("min_threshold", 0.05)
-        umbral2 = kwargs.get("max_threshold", 0.2)
-
-        final = ee.Image.constant(0).select([0],["cat"])
-
-        for n, img in enumerate(lista):
-            n += 1
-
-            img = tools.mask2zero(img)
-
-            if n == 1:
-                t1_cat = img.select("t1_cat")
-                t1_duracion = img.select("t1_duration")
-                t1_slope = img.select("t1_slope")
-
-                t1_caida = t1_duracion.multiply(t1_slope).toFloat()
-                cat = t1_caida.lte(-umbral1).multiply(3).select([0],["cat"])
-                # cat = t1_cat.eq(2).Or(t1_cat.eq(3)).multiply(3).select([0],["cat"])
-                final = final.add(cat)
-                # continue
-                break
-
-            elif n == 2:
-                t1_cat = img.select("t1_cat")
-                t2_cat = img.select("t2_cat")
-                t1_est = t1_cat.eq(1)
-                t2_caida = t2_cat.eq(3)
-                t2_suave = t2_cat.eq(2)
-
-                cambio = t1_est.And(t2_caida)
-                posible = t1_est.And(t2_suave).multiply(2)
-                cat = cambio.add(posible).select([0],["cat"])
-                final = final.add(cat)
-                # continue
-                break
-
-            cat0 = ee.Image.constant(0).select([0],["cat"])
-
-            for tramos in range(3, n+1):
-                n1 = str(tramos-2)
-                n2 = str(tramos-1)
-                n3 = str(tramos)
-
-                t1_cat = img.select("t{0}_cat".format(n1))
-                t2_cat = img.select("t{0}_cat".format(n2))
-                t3_cat = img.select("t{0}_cat".format(n3))
-
-                t2_slope = img.select("t{0}_slope".format(n2))
-                t2_duracion = img.select("t{0}_duration".format(n2))
-
-                t1_est = t1_cat.eq(1)
-                t1_suave = t1_cat.eq(2)
-                t1_caida = t1_cat.eq(3)
-                t2_caida = t2_cat.eq(3)
-                t2_suave = t2_cat.eq(2)
-                t3_est = t3_cat.eq(1)
-                t3_crec = t3_cat.eq(4)
-
-                t2_mag = t2_slope.multiply(t2_duracion)
-
-                cambio1 = t1_est.And(t2_caida).And(t3_est)  # stable,
-                cambio2 = t1_suave.And(t2_caida).And(t3_est)
-                cambio3 = t1_est.And(t2_caida).And(t3_crec)
-                cambio4 = t1_suave.And(t2_caida).And(t3_crec)
-                cambio5 = t1_caida.And(t2_suave).And(t3_est)
-                cambio6 = t1_caida.And(t2_suave).And(t3_crec)
-                cambio7 = t1_caida.And(t2_caida).And(t3_est)
-                cambio8 = t1_caida.And(t2_caida).And(t3_crec)
-
-                cambio = cambio1.Or(cambio2).Or(cambio3).Or(cambio4).Or(cambio5).Or(cambio6).Or(cambio7).Or(cambio8)
-
-                posible1 = t1_est.And(t2_suave).And(t3_est).multiply(2)
-                # posible2 = t1_est.And(t2_mag.lte(-umbral2)).And(t3_est.Or(t3_crec)).multiply(2)
-
-                posible = posible1#.Or(posible2)
-
-                cat = cambio.add(posible).select([0],["cat"])
-                cat = tools.mask2zero(cat)
-
-                cat0 = cat0.add(cat)
-
-            final = final.add(cat0)
-
-        return final
-
-
-'''
-if __name__ == "__main__":
-    col = ee.ImageCollection("users/rprincipe/AP_tierraDelFuego_mask2number/11nbr_fill")
-    lt = LandTrendr(col, "nbr")
-    break2 = lt.break2band()
-    funciones.asset(break2, "break2band", "users/rprincipe/Pruebas/break2band_1", lt.region)
-'''
