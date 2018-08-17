@@ -5,6 +5,7 @@ import ee
 ee.Initialize()
 
 from geetools import tools
+from collections import namedtuple
 
 
 def classify(ltr, *args, **kwargs):
@@ -15,7 +16,7 @@ def classify(ltr, *args, **kwargs):
     :return:
     """
 
-    tramos = ltr.stretches(*args, **kwargs)
+    tramos = stretches(*args, **kwargs)
     lista = tramos.img_list
 
     umbral1 = kwargs.get("min_threshold", 0.05)
@@ -134,7 +135,7 @@ def class1(ltr, umb_b=0.01, umb_m=0.05):
     :rtype: ee.ImageCollection
     """
 
-    col = ltr.slope()
+    col = ltr.slope
 
     def categoria(img):
         d = img.get("system:time_start")
@@ -300,7 +301,7 @@ def classIncendio(ltr, umbral=0.05, agrupar=False):
         adelante = ee.String("slope_after")
         atras = ee.String("slope_before")
 
-        indice = ee.Image(img).select(ltr.index + "_fit")
+        indice = ee.Image(img).select(ltr.fit_band + "_fit")
         umb = ee.Image.constant(umbral)
 
         # CREO UNA BANDA PARA EL AÑO
@@ -518,7 +519,7 @@ def classIncendio(ltr, umbral=0.05, agrupar=False):
         imagen = ee.Image(img0).select("cat")
         img = ee.Image(imagen)
 
-        indice = ee.Image(img0).select(ltr.index + "_fit")
+        indice = ee.Image(img0).select(ltr.fit_band + "_fit")
         dif = ee.Image(img0).select("indice_dif")
         difA = ee.Image(dif).abs()
         fact = difA.divide(indice)
@@ -589,6 +590,12 @@ def classIncendio(ltr, umbral=0.05, agrupar=False):
         return col
 
 
+def classIncendioImage(classified_image, time_list):
+    """ Create a unique image with encoded values for the fire year of
+    occurrence """
+    pass
+
+
 def stable_pixels(ltr, threshold=0.02):
     """ Generate a stable pixels throughout the year image
 
@@ -617,10 +624,10 @@ def stable_pixels(ltr, threshold=0.02):
 
     # BANDA indice_fit DE LA PRIMER IMG DE LA COL
     primera = (ee.Image(col.first())
-               .select(ltr.index + "_fit"))
+               .select(ltr.fit_band + "_fit"))
 
     ultima = (ee.Image(col.sort('system:time_start', False).first())
-              .select(ltr.index + '_fit'))
+              .select(ltr.fit_band + '_fit'))
 
     # OBTENGO LA PENDIENTE GENERAL RESTANDO EL INDICE AL FINAL MENOS
     # EL INDICE INICIAL
@@ -800,3 +807,180 @@ def max_diff(ltr, category):
     img = ee.Image(resto.iterate(maxima, primera))
     # img = img.updateMask(stable_pixels)
     return img
+
+def stretches(ltr, min_threshold=0.05, max_threshold=0.2):
+    """ This method characterize the segmentation stretches and returns as
+    many images as the amount of stretches. Categories are:
+
+    * 1: no change: -min_threshold <= value <= min_threshold
+    * 2: soft loss: -max_threshold <= value < -min_threshold
+    * 3: steep loss: value < -max_threshold
+    * 4: soft gain: min_threshold < value <= max_threshold
+    * 5: steep gain: max_threshold < value
+
+    :param min_threshold: divides 'no change' and 'soft change'
+    :type min_threshold: float
+    :param max_threshold: divides 'soft change' and 'steep change'
+    :type max_threshold: float
+
+    Return a new class called 'Stretches' with the following properties:
+
+    - img_list: a list of images containing the stretches.
+
+      Each image has the following bands:
+
+        - t{n}_slope: slope of stretch n
+        - t{n}_duration: duration of stretch n (in years)
+        - t{n}_cat: category for stretch n
+
+    - image: an image with unified results. Will have as many bands as
+      found stretches, times 3. In case stretches in one pixel are
+      less than stretches in the whole image, the last will be empty.
+
+      Example:
+
+      The whole image has 4 stretches. The pixel that has 2
+      stretches will have the following values:
+
+        - t1_slope: value
+        - t2_slope: value
+        - t3_slope: 0
+        - t4_slope: 0
+
+    :rtype: namedtuple
+    """
+    # Threshold images
+    umb1pos = ee.Image.constant(min_threshold).toFloat()
+    umb2pos = ee.Image.constant(max_threshold).toFloat()
+
+    umb1neg = ee.Image.constant(-min_threshold).toFloat()
+    umb2neg = ee.Image.constant(-max_threshold).toFloat()
+
+    # Number of breakpoints in each pixel
+    bkps = ltr.breakpoints
+    img_bkp = bkps.image
+
+    # Total number of breakpoints
+    total_bkp = bkps.total.getInfo()
+    max_tramos = total_bkp - 1
+
+    bandas_a = ["year_"+str(i) for i in range(total_bkp)]
+    bandas_fit = ["fit_"+str(i) for i in range(total_bkp)]
+    bandas = bandas_a + bandas_fit
+
+    b2b = ltr.break2band().select(bandas)
+
+    imagen = b2b.addBands(img_bkp)
+
+    # OBTENGO TANTAS IMAGENES COMO TRAMOS HAYA EN LA COLECCION
+    listaimg = []
+
+    for t, bkp in enumerate(range(2, total_bkp+1)):
+        tramos = t+1
+        mask = imagen.select("n_bkp").eq(bkp)
+        masked = imagen.updateMask(mask)
+        img_tramos = ee.Image.constant(0)
+        for id, tramo in enumerate(range(tramos, 0, -1)):
+            # NOMBRE DE LA BANDA
+            nombre_tramo = "t"+str(id+1)
+
+            # INDICES INI Y FIN
+            ini = max_tramos-tramo
+            fin = ini + 1
+
+            # SELECCIONO LAS BANDAS
+            a_ini = ee.Image(masked.select("year_"+str(ini))).toFloat()
+            a_fin = ee.Image(masked.select("year_"+str(fin))).toFloat()
+            fit_ini = masked.select("fit_"+str(ini))
+            fit_fin = masked.select("fit_"+str(fin))
+
+            # COMPUTO
+            lapso = a_fin.subtract(a_ini)
+            dif_total = fit_fin.subtract(fit_ini)
+
+            dif_anual = dif_total.divide(lapso)
+            slope = dif_anual.select([0],[nombre_tramo+"_slope"])
+
+            duracion = ee.Image(lapso.select([0],[nombre_tramo+"_duration"])).toUint8()
+
+            # CATEGORIZACION
+            uno = slope.gte(umb1neg).And(slope.lte(umb1pos))
+            dos = slope.lt(umb1neg).And(slope.gte(umb2neg))
+            tres = slope.lt(umb2neg)
+            cuatro = slope.gt(umb1pos).And(slope.lte(umb2pos))
+            cinco = slope.gt(umb2pos)
+
+            cat = uno.add(
+                dos.multiply(2)).add(
+                tres.multiply(3)).add(
+                cuatro.multiply(4)).add(
+                cinco.multiply(5))
+
+            cat = ee.Image(cat).select([0],[nombre_tramo+"_cat"]).toUint8()
+
+            img_tramos = img_tramos.addBands(slope).addBands(duracion).addBands(cat)
+
+        # SACO LA PRIMER BANDA QUE SE CREA ANTES DE INICIAR EL LOOP
+        bandas = img_tramos.bandNames().slice(1)
+        img_tramos = img_tramos.select(bandas)
+
+        listaimg.append(img_tramos)
+
+    # CREO UNA IMAGEN VACIA CON TODAS LAS BANDAS
+    bandas_cat = ["t{0}_cat".format(str(n+1)) for n in range(max_tramos)]
+    bandas_slope = ["t{0}_slope".format(str(n+1)) for n in range(max_tramos)]
+    bandas_duracion = ["t{0}_duration".format(str(n+1)) for n in range(max_tramos)]
+
+    bandas_todas = zip(bandas_slope, bandas_duracion, bandas_cat)
+
+    bandas_todas = list(chain.from_iterable(bandas_todas))
+
+    # bandas_todas = bandas_cat+bandas_slope+bandas_duracion
+
+    lista_ini = ee.List(bandas_todas).slice(1)
+
+    img_ini = ee.Image.constant(0).select([0],["t1_slope"])
+
+    def addB(item, ini):
+        ini = ee.Image(ini)
+        img = ee.Image.constant(0).select([0],[item])
+        return ini.addBands(img)
+
+    img_final = ee.Image(lista_ini.iterate(addB, img_ini))
+
+    for tramos, img in enumerate(listaimg):
+        tramos += 1
+        faltan = max_tramos - tramos
+
+        # print "faltan", faltan
+        # nombre = "falta{}tramo".format(str(faltan))
+
+        if faltan == 0:
+            img = tools.mask2zero(img)
+            img_final = img_final.add(img)
+            # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, ltr.region)
+            continue
+
+        for tramo in range(faltan):
+            tramo += 1
+            i = tramo + tramos
+            bcat = ee.Image.constant(0).select([0],["t{0}_cat".format(str(i))])
+            bslope = ee.Image.constant(0).select([0],["t{0}_slope".format(str(i))])
+            bdur = ee.Image.constant(0).select([0],["t{0}_duration".format(str(i))])
+            total = bcat.addBands(bslope).addBands(bdur)
+            img = img.addBands(total)
+
+        img = tools.mask2zero(img)
+
+        # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, ltr.region)
+
+        # bandas = img.getInfo()["bands"]
+        # print "tramos:", tramos, [i["id"] for i in bandas]
+
+        img_final = img_final.add(img)
+
+    # return
+
+    resultado = namedtuple("Stretches", ["img_list", "image"])
+
+    return resultado(listaimg, img_final)
