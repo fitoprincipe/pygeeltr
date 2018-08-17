@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from geetools import tools
+from geetools import tools, tools_image
 import math
 from collections import namedtuple
 from itertools import chain
@@ -12,7 +12,7 @@ import ee
 if not ee.data._initialized: ee.Initialize()
 
 
-def statistics(collection, band=None, suffix='_fit'):
+def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     """ Compute sum of squares and R2 for values of every pixel in a
     ImageCollection that has already be fitted
 
@@ -23,6 +23,9 @@ def statistics(collection, band=None, suffix='_fit'):
     :type band: str
     :param suffix: suffix of band that holds the fitted values
     :type suffix: str
+    :param skip_outliers: outliers (in difference) are not included for
+        computing
+    :type skip_outliers: bool
     :return:
             :ssres: residual sum of square in an ee.Image
             :r2: coefficient of determination (r2)
@@ -38,41 +41,61 @@ def statistics(collection, band=None, suffix='_fit'):
     # Band mean
     justbands = collection.select([band, fitted_band])
 
-    # Mean
+    def diff(img):
+        nbr = img.select([0])
+        fit = img.select([1])
+        dif = fit.subtract(nbr).abs().select([0], ['diff'])
+        return img.addBands(dif)
+
+    justbands = justbands.map(diff)
+
+    # Stats
     mean = justbands.mean()
+    median = justbands.median().select(['diff'], ['median'])
+    stddev = justbands.reduce(ee.Reducer.stdDev()).select(['diff_stdDev'],
+                                                          ['stddev'])
+    interval_min = median.subtract(stddev.multiply(2)).select([0], ['min'])
+    interval_max = median.add(stddev.multiply(2)).select([0], ['max'])
 
     # SSTOT
-    sstot_image = tools.empty_image(0, ['sstot'])
+    sstot_image = tools_image.constant(0, ['sstot'])
 
     def sstot(img, sstoti):
         sstoti = ee.Image(sstoti) # cast
         mean_i = mean.select([band])
         val = img.select([band])
-        compute = val.subtract(mean_i).pow(2).select([0], ['sstot'])
+        diff_mean = val.subtract(mean_i)
+        # excude outlier
+
+        diff = img.select('diff')
+        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select([0], ['out'])
+
+        # compute
+        compute = diff_mean.pow(2).select([0], ['sstot'])
+
+        # skip outliers
+        if skip_outliers:
+            compute = compute.updateMask(outlier.Not()).unmask()
+
         return sstoti.add(compute)
 
     sstot_image = ee.Image(justbands.iterate(sstot, sstot_image))
 
-    # SSREG
-    ssreg_image = tools.empty_image(0, ['ssreg'])
-
-    def ssreg(img, ssregi):
-        ssregi = ee.Image(ssregi) # cast
-        mean_i = mean.select([band])
-        val = img.select([fitted_band])
-        compute = val.subtract(mean_i).pow(2).select([0], ['ssreg'])
-        return ssregi.add(compute)
-
-    ssreg_image = ee.Image(justbands.iterate(ssreg, ssreg_image))
-
     # SSRES
-    ssres_image = tools.empty_image(0, ['ssres'])
+    ssres_image = tools_image.constant(0, ['ssres'])
 
     def ssres(img, ssresi):
         ssresi = ee.Image(ssresi) # cast
-        val = img.select([band])
-        fit = img.select([fitted_band])
-        compute = val.subtract(fit).pow(2).select([0], ['ssres'])
+
+        diff = img.select('diff')
+        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select([0], ['out'])
+
+        compute = diff.pow(2).select([0], ['ssres'])
+
+        # skip outliers
+        if skip_outliers:
+            compute = compute.updateMask(outlier.Not()).unmask()
+
         return ssresi.add(compute)
 
     ssres_image = ee.Image(justbands.iterate(ssres, ssres_image))
@@ -81,7 +104,7 @@ def statistics(collection, band=None, suffix='_fit'):
     division = ssres_image.divide(sstot_image).select([0], ['r2'])
 
     # 1-division
-    r2 = tools.empty_image(1, ['r2']).subtract(division).toFloat()
+    r2 = tools_image.constant(1, ['r2']).subtract(division).toFloat()
 
     result = namedtuple("Statistics", ["ssres", "r2"])
 
@@ -93,28 +116,29 @@ class LandTrendr(object):
     LandTrendr (Landsat-based detection of Trends in Disturbance and
     Recovery) is an algorithm that temporally segments a time-series of
     images by extracting the spectral trajectories of change over time.
-    The first band of each image is used to find breakpoints, and those
-    breakpoints are used to perform fitting on all subsequent bands.
-    The breakpoints are returned as a 2-D matrix of 4 rows and as many
-    columns as images. The first two rows are the orignial X and Y
-    values. The third row contains the Y values fitted to the estimated
-    segments, and the 4th row contains a 1 if the corresponding point
-    was used as a segment vertex or 0 if not.
 
-      **Parameters:**
+    **Parameters:**
 
-    - timeSeries (ImageCollection):
+    - timeseries (ImageCollection):
 
       Collection from which to extract trends (it's assumed thateach
       image in the collection represents one year). The first band is
       usedto find breakpoints, and all subsequent bands are fitted
       using those breakpoints.
 
-    - index (str):
+    - fit_band (str):
 
       band to use for regression
 
-      **Optionals:**
+    **Optionals:**
+
+    - area (ee.Geometry): area to compute LandTrendr. If `None`, takes the
+      area of the first image
+
+    - date_measure (str): What date represent every image in the collection?.
+      Defaults to `year`. Can be `month`, `day`, etc
+
+    **Originals:**
 
     - maxSegments (Integer):
 
@@ -149,10 +173,12 @@ class LandTrendr(object):
       Min observations needed to perform output fitting.
     """
 
-    def __init__(self, timeserie, index, area=None, **kwargs):
+    def __init__(self, timeseries, fit_band, area=None,
+                 date_measure='year', **kwargs):
 
-        self.timeSeries = timeserie
-        self.index = index
+        self.timeSeries = timeseries
+        self.fit_band = fit_band
+        self.date_measure = date_measure
 
         self.maxSegments = kwargs.get("maxSegments", 4)
         self.spikeThreshold = kwargs.get("spikeThreshold", 0.9)
@@ -167,22 +193,27 @@ class LandTrendr(object):
         # Axes
         self.year_axis = 1
         self.band_axis = 0
-        # self.col_size = tools.execli(self.timeSeries.size().getInfo)()
 
         if area:
             self.area = area
         else:
             self.area = ee.Image(self.timeSeries.first()).geometry()
 
-        # self.region = tools.execli(self.area.getInfo)()["coordinates"]
         self.region = tools.getRegion(self.area)
 
+        self._core = None
+        self._breakdown = None
+        self._slope = None
+        self._statistics = None
+        self._date_range = None
+        self._date_range_bitreader = None
+
     @classmethod
-    def Principe(cls, timeserie, index, area=None):
-        """ Factory Method para crear una clase con los parametros
-        definidos por Principe
+    def Principe(cls, timeseries, index, area=None):
+        """ Factory Method to create a LandTrendr class with params defined
+        by Rodrigo E. Principe (fitoprincipe82@gmail.com)
         """
-        newobj = cls(timeserie, index, area,
+        newobj = cls(timeseries, index, area,
                      maxSegments=4,
                      spikeThreshold=0.1,
                      vertexCountOvershoot=0,
@@ -195,11 +226,11 @@ class LandTrendr(object):
         return newobj
 
     @classmethod
-    def Kennedy(cls, timeserie, index, area=None):
-        """ Factory Method para crear una clase con los parametros
-        definidos por Kennedy (original)
+    def Kennedy(cls, timeseries, index, area=None):
+        """ Factory Method to create a LandTrendr class with params defined
+        by Kennedy (original)
         """
-        newobj = cls(timeserie, index, area,
+        newobj = cls(timeseries, index, area,
                      maxSegments=4,
                      spikeThreshold=0.9,
                      vertexCountOvershoot=3,
@@ -212,11 +243,11 @@ class LandTrendr(object):
         return newobj
 
     @classmethod
-    def Liang(cls, timeserie, index, area=None):
-        """ Factory Method para crear una clase con los parametros
-        definidos por Liang
+    def Liang(cls, timeseries, index, area=None):
+        """ Factory Method to create a LandTrendr class with params defined
+        by Liang
         """
-        newobj = cls(timeserie, index, area,
+        newobj = cls(timeseries, index, area,
                      maxSegments=4,
                      spikeThreshold=0.9,
                      vertexCountOvershoot=0,
@@ -228,48 +259,75 @@ class LandTrendr(object):
 
         return newobj
 
-    def CORE(self):
-        """ Apply original LandTrendr Algorithm as given in GEE
-        :return: namedtuple
+    @property
+    def date_range(self):
+        """ Range of the date measure
 
-        :result: Same as the original algorithm (An array image with one band
+        :rtype: ee.List
+        """
+        if not self._date_range:
+            ordered = self.timeSeries.sort('system:time_start', True)
+            def get_relative_date(img, ini):
+                ini = ee.List(ini)
+                date = img.date()
+                measure = date.get(self.date_measure)
+                return ini.add(measure)
+
+            result = ordered.iterate(get_relative_date, ee.List([]))
+            self._date_range = ee.List(result)
+
+        return self._date_range
+
+
+    @property
+    def date_range_bitreader(self):
+        """ Make a BitReader to encode the breakpoints
+
+        Example:
+
+        BitReader({0: 1999, 1: 2000, ... 12:2010}
+        """
+        if not self._date_range_bitreader:
+            time_list = self.date_range.getInfo()
+            reader_dict = {}
+            for i, t in enumerate(time_list):
+                key = '{}'.format(i)
+                reader_dict[key] = {1: t}
+
+            self._date_range_bitreader = tools.BitReader(reader_dict)
+
+        return self._date_range_bitreader
+
+    @property
+    def core(self):
+        """ Apply original LandTrendr Algorithm as given in GEE
+
+        :return: Same as the original algorithm (An array image with one band
                  called 'LandTrendr' and the rest of the bands named:
                  bandname_fit (ej: B2_fit))
-
-        :year_list: list of millisecond dates (ee.List)
         """
-        # if self.col_size > 1:  # 1 Request
+        if not self._core:
+            # Select the index band only (example: 'nbr') in the whole
+            # collection
+            timeserie_index = self.timeSeries.select(self.fit_band)
 
-        # Select the index band only (example: 'nbr') in the whole collection
-        timeserie_index = self.timeSeries.select(self.index)
+            img = ee.Algorithms.TemporalSegmentation.LandTrendr(
+                timeSeries=timeserie_index,
+                # self.timeSeries,
+                maxSegments=self.maxSegments,
+                spikeThreshold=self.spikeThreshold,
+                vertexCountOvershoot=self.vertexCountOvershoot,
+                preventOneYearRecovery=self.preventOneYearRecovery,
+                recoveryThreshold=self.recoveryThreshold,
+                pvalThreshold=self.pvalThreshold,
+                bestModelProportion=self.bestModelProportion,
+                minObservationsNeeded=self.minObservationsNeeded)
 
-        img = ee.Algorithms.TemporalSegmentation.LandTrendr(
-            timeSeries=timeserie_index,
-            # self.timeSeries,
-            maxSegments=self.maxSegments,
-            spikeThreshold=self.spikeThreshold,
-            vertexCountOvershoot=self.vertexCountOvershoot,
-            preventOneYearRecovery=self.preventOneYearRecovery,
-            recoveryThreshold=self.recoveryThreshold,
-            pvalThreshold=self.pvalThreshold,
-            bestModelProportion=self.bestModelProportion,
-            minObservationsNeeded=self.minObservationsNeeded)
+            self._core = img
 
-        '''
-        def anioslist(img, listanios):
-            time = ee.Date(img.get("system:time_start")).millis()
-            return ee.List(listanios).add(time)
+        return self._core
 
-        anios = ee.List(self.timeSeries.iterate(anioslist, ee.List([])))
-
-        core = namedtuple("CORE", ["result", "year_list"])
-
-        return core(result=img, year_list=anios)
-        # else:
-        #     raise ValueError("The time serie must have more than 1 image")
-        '''
-        return img
-
+    @property
     def breakdown(self):
         ''' This method breaks down the resulting array and returns a list of
         images
@@ -283,38 +341,45 @@ class LandTrendr(object):
         It assumes that each image in the collection represents only one year
         of the time series
         '''
-        # core = self.CORE().result
-        core = self.CORE()
-        ltr = core.select('LandTrendr')
-        rmse = core.select('rmse')
-        n = self.timeSeries.size()
-        ordered_ts = self.timeSeries.sort('system:time_start')
-        ordered_list = ordered_ts.toList(n)
-        seq = ee.List.sequence(0, n.subtract(1))
-        def create(position, ini):
-            ini = ee.List(ini)
-            nextt = ee.Number(position).add(1)
-            start = ee.Image.constant(ee.Number(position))
-            end = ee.Image.constant(nextt)
-            sli = ltr.arraySlice(1, start.toInt(), end.toInt(), 1)
+        if not self._breakdown:
+            core = self.core
+            ltr = core.select('LandTrendr')
+            rmse = core.select('rmse')
+            n = self.timeSeries.size()
+            ordered_ts = self.timeSeries.sort('system:time_start')
+            ordered_list = ordered_ts.toList(n)
+            seq = ee.List.sequence(0, n.subtract(1))
+            def create(position, ini):
+                ini = ee.List(ini)
+                nextt = ee.Number(position).add(1)
+                start = ee.Image.constant(ee.Number(position))
+                end = ee.Image.constant(nextt)
+                sli = ltr.arraySlice(1, start.toInt(), end.toInt(), 1)
 
-            # CONVERT ARRAY TO IMG
-            imgIndx = sli.arrayProject([0]).arrayFlatten(
-                [["year", self.index, self.index + "_fit", "bkp"]])
+                # CONVERT ARRAY TO IMG
+                imgIndx = sli.arrayProject([0]).arrayFlatten(
+                    [["year", self.fit_band, self.fit_band + "_fit", "bkp"]])
 
-            date = ee.Image(ordered_list.get(position)).date().millis()
-            result = imgIndx.addBands(rmse).set('system:time_start', date)
-            return ini.add(result)
-        collist = ee.List(seq.iterate(create, ee.List([])))
-        col = ee.ImageCollection(collist)
+                date = ee.Image(ordered_list.get(position)).date().millis()
+                result = imgIndx.addBands(rmse).set('system:time_start', date)
+                return ini.add(result)
+            collist = ee.List(seq.iterate(create, ee.List([])))
+            col = ee.ImageCollection(collist)
 
-        return col
+            self._breakdown = col
 
+        return self._breakdown
+
+    @property
     def statistics(self):
         """ Compute statistics for this object """
-        collection = self.slope()
-        return statistics(collection, self.index)
+        if not self._statistics:
+            collection = self.slope
+            self._statistics = statistics(collection, self.fit_band)
 
+        return self._statistics
+
+    @property
     def slope(self):
         """ Calculate slope of each segment in the LandTrendR fit
 
@@ -333,196 +398,195 @@ class LandTrendr(object):
             - [6] change: change's magnitud
               (between -1 (greater loose) and 1 (greater gain))
             - [7] angle: change's angle in radians
+            - [8] rmse: root mean square error (original)
 
         :rtype: ee.ImageCollection
 
         """
+        if not self._slope:
+            breakdown = self.breakdown
 
-        # APLICO LANDTRENDR
-        #listaImgsPy = self.breakdown()
-        #listaImgs = ee.List(listaImgsPy)  # ee.List
-        #colLTR = ee.ImageCollection(listaImgs)  # ee.ImageCollection
-        colLTR = self.breakdown()
+            def add_date(img):
+                """ Pass system:time_start property """
+                date = img.get("system:time_start")
+                return img.set("system:time_start", date)
 
-        def addTime(img):
-            """ Pass system:time_start property """
-            prop_anio = img.get("system:time_start")
-            # factor = ee.Image.constant(1000)
-            # img = img.select(self.index, self.index + "_fit", "bkp") #.addBands(anioI)  # .multiply(factor).toInt()
+            collection = breakdown.map(add_date)
 
-            return img.set("system:time_start", prop_anio)
+            def compute(central, before=None, after=None):
+                """ Compute slope with image before and after
 
-        colInt = colLTR.map(addTime)
+                :param central: imagen 'central' (1)
+                :type central: ee.Image
 
-        # DEBUG
-        # ultima = ee.Image(colInt.toList(50).get(colInt.size().getInfo()-1))
-        # print "fecha de la ultima img:", ee.Date(ultima.date()).get(
-        # "year").getInfo()
+                :param before: imagen anterior (0)
+                :type before: ee.Image
 
-        # NOMBRES PARA LAS BANDAS
-        adelante = ee.String("slope_after")
-        atras = ee.String("slope_before")
+                :param after: imagen posterior (2)
+                :type after: ee.Image
 
-        def calcIndices(**kwargs):
-            """ Función para calcular los indices de los slope comparando
-            los indices de la imagen anterior y posterior a la central. Si no
-            hay anterior o posterior ese segmento lo pone en 0
+                :return: the central image with computed values:
 
-            :param central: imagen 'central' (1)
-            :type central: ee.Image
+                    **{band}**: original band value
 
-            :param ant: imagen anterior (0)
-            :type ant: ee.Image
+                    **{band}_fit**: fitted band value
 
-            :param pos: imagen posterior (2)
-            :type pos: ee.Image
+                    **slope_before**: slope to the image before
 
-            :return: la imagen central con los indices calculados:
+                    **slope_after**: slope to the image after
 
-                **index**: index original
+                    **change**: change magnitude (between -1 (greatest loss)
+                    and 1 (greatest gain))
 
-                **indice_fit**: index ajustado
+                    **angle**: change angle in radians
+                :rtype: ee.Image
+                """
+                name_before = 'slope_before'
+                name_after = 'slope_after'
 
-                **slope_before**: diferencia atras
+                ### CENTRAL ################################################
+                central_img = ee.Image(central)
+                central_fit = central_img.select(self.fit_band + "_fit")
+                central_year = central_img.select("year")
+                central_date = central_img.get("system:time_start")
 
-                **slope_after**: diferencia adelante
+                #### BEFORE #################################################
+                if before:
+                    before_img = ee.Image(before)
 
-                **change**: magnitud del change (entre -1 (> perdida)
-                y 1 (> ganancia))
+                    before_fit = before_img.select(self.fit_band + "_fit")
+                    before_year = before_img.select("year")
 
-                **angle**: angle del change en radianes
-            :rtype: ee.Image
-            """
+                    # difference (year) between central_img and before_img
+                    before_diff_year = central_year.subtract(before_year)
 
-            ### CENTRAL ################################################
-            img1orig = ee.Image(kwargs.get("central"))
-            img1fit = img1orig.select(self.index + "_fit")
-            anio1 = img1orig.select("year")
-            d1 = img1orig.get("system:time_start")
+                    # difference (fit) between central_img and before_img
+                    before_diff_fit = central_fit.subtract(before_fit)\
+                                                 .divide(before_diff_year)\
+                                                 .select([0], [name_before])
 
-            #### ATRAS #################################################
-            # if kwargs.has_key("ant"):
-            if "ant" in kwargs.keys():
-                img0 = ee.Image(kwargs.get("ant"))
+                #### AFTER ##############################################
+                if after:
+                    after_img = ee.Image(after)
 
-                img0fit = img0.select(self.index + "_fit")
-                anio0 = img0.select("year")
+                    after_fit = after_img.select(self.fit_band + "_fit")
+                    after_year = after_img.select("year")
+                    after_diff_year = after_year.subtract(central_year)
+                    after_diff_fit = after_fit.subtract(central_fit)\
+                                              .divide(after_diff_year)\
+                                              .select([0], [name_after])
 
-                # CALCULO LA DIFERENCIA DE AÑOS ENTRE IM1 E IM0
-                dif_anio_At = anio1.subtract(anio0)
+                #### FIRST IMAGE #################
+                if after and not before:
+                    before_diff_fit = after_diff_fit.select([0], [name_before])
 
-                # CALCULO LA DIFERENCIA DEL INDICE AJUSTADO
-                difAt = (img1fit.subtract(img0fit)
-                         .divide(dif_anio_At).select([0], [atras]))
+                elif before and not after:
+                    after_diff_fit = before_diff_fit.select([0], [name_after])
 
-            #### ADELANTE ##############################################
-            # if kwargs.has_key("pos"):
-            if "pos" in kwargs.keys():
-                img2 = ee.Image(kwargs.get("pos"))
+                #### change ################################################
+                pi = ee.Image.constant(math.pi)
 
-                img2fit = img2.select(self.index + "_fit")
-                anio2 = img2.select("year")
-                dif_anio_Ad = anio2.subtract(anio1)
-                difAd = (img2fit.subtract(img1fit)
-                         .divide(dif_anio_Ad).select([0], [adelante]))
+                # angleS
+                diff_before_radians = before_diff_fit.atan()
+                diff_after_radians = after_diff_fit.atan()
 
-            #### SI NO HAY IMG ANTERIOR Y SI POSTERIOR #################
-            # if not kwargs.has_key("ant") and kwargs.has_key("pos"):
-            if "ant" not in kwargs.keys() and "pos" in kwargs.keys():
-                difAt = difAd.select([0], [atras])
-            # elif not kwargs.has_key("pos") and kwargs.has_key("ant"):
-            elif "pos" not in kwargs.keys() and "ant" in kwargs.keys():
-                difAd = difAt.select([0], [adelante])
+                # Difference between after and before
+                diff_fit = after_diff_fit.subtract(before_diff_fit)
 
-            #### change ################################################
-            pi = ee.Image.constant(math.pi)
+                # Conditional mask
+                gain_mask = diff_fit.gte(0)
 
-            # angleS
-            difAtRad = difAt.atan()
-            difAdRad = difAd.atan()
+                # each case images
+                loss_img = diff_before_radians.subtract(diff_after_radians)\
+                                              .subtract(pi)
+                gain_img = pi.add(diff_before_radians)\
+                             .subtract(diff_after_radians)
 
-            # DIFERENCIA ATRAS Y ADELANTE
-            dif = difAd.subtract(difAt)
+                # angle
+                angle = ee.Image(loss_img.where(gain_mask, gain_img))\
+                          .select([0], ["angle"])\
+                          .toFloat()
 
-            # MASCARAS CONDICIONALES
-            cond_ganancia = dif.gte(0)
+                # Magnitude (between -1 y 1)
+                gain_magnitude = pi.subtract(angle).divide(pi)
+                loss_magnitude = pi.add(angle).divide(pi).multiply(-2)
 
-            # IMAGENES PARA CADA CASO
-            img_perdida = difAtRad.subtract(difAdRad).subtract(pi)
-            img_ganancia = pi.add(difAtRad).subtract(difAdRad)
+                change = ee.Image(loss_magnitude.where(gain_mask, gain_magnitude))\
+                           .select([0], ["change"])\
+                           .toFloat()
 
-            # angle
-            angle = (ee.Image(img_perdida.where(cond_ganancia, img_ganancia))
-                      .select([0], ["angle"])
-                      .toFloat())
+                # gain
+                pos_pi = ee.Number(3.14)
+                gain = angle.lt(pos_pi).And(angle.gt(0)).toInt()
 
-            # MAGNITUD (entre -1 y 1)
-            mag_ganancia = pi.subtract(angle).divide(pi)
-            mag_perdida = pi.add(angle).divide(pi).multiply(-2)
+                # loss
+                neg_pi = ee.Number(-3.14)
+                loss = angle.gt(neg_pi).And(angle.lt(0)).toInt()
 
-            change = (ee.Image(mag_perdida.where(cond_ganancia, mag_ganancia))
-                      .select([0], ["change"])
-                      .toFloat())
+                img = central_img.addBands(before_diff_fit)\
+                                 .addBands(after_diff_fit)\
+                                 .addBands(change)\
+                                 .addBands(angle)\
+                                 .addBands(gain.select([0], ['gain']))\
+                                 .addBands(loss.select([0], ['loss']))
 
-            img = img1orig.addBands(difAt).addBands(difAd).addBands(
-                change).addBands(angle)
-            img = img.set("system:time_start", d1)
+                img = img.set("system:time_start", central_date)
 
-            return img
+                return img
 
-        # CONVIERTO LA COL A UNA LISTA
-        colListE = colInt.toList(50)
+            # Collection to List
+            col_list = collection.toList(collection.size())
 
-        # CREO UNA LISTA VACIA PARA IR AGREGANDO LAS IMG RESULTADO Y CREAR
-        # LA NUEVA COLECCION
-        newColList = ee.List([])
+            new_col_list = ee.List([])
 
-        # TAMAÑO DE LA COLECCION
-        tam = tools.execli(colListE.size().getInfo)()  # - 1
+            # collection size
+            tam = col_list.size().getInfo()  # - 1
 
-        # PRIMER IMAGEN
-        im0 = colListE.get(0)
+            # first image
+            im0 = col_list.get(0)
 
-        # SEGUNDA IMAGEM
-        im1 = colListE.get(1)
+            # second image
+            im1 = col_list.get(1)
 
-        # CALCULA LOS INDICES ENTRE LA PRIMERA Y LA SEGUNDA IMG
-        im0 = calcIndices(central=im0, pos=im1)
+            # compute first and second images
+            im0 = compute(central=im0, after=im1)
 
-        # AGREGA EL RESULTADO A LA LISTA VACIA
-        newColList = newColList.add(im0)
+            # add to list
+            new_col_list = new_col_list.add(im0)
 
-        # MEDIO
-        for im in range(1, tam - 1):
-            im0 = colListE.get(im - 1)
-            im1 = colListE.get(im)
-            im2 = colListE.get(im + 1)
+            # middle
+            for im in range(1, tam - 1):
+                im0 = col_list.get(im - 1)
+                im1 = col_list.get(im)
+                im2 = col_list.get(im + 1)
 
-            im1 = calcIndices(central=im1, ant=im0, pos=im2)
-            newColList = newColList.add(im1)
+                im1 = compute(central=im1, before=im0, after=im2)
+                new_col_list = new_col_list.add(im1)
 
-        # ULTIMA IMAGEN
-        im0 = colListE.get(tam - 2)
-        im1 = colListE.get(tam - 1)
+            # last image
+            im0 = col_list.get(tam - 2)
+            im1 = col_list.get(tam - 1)
 
-        im1 = calcIndices(central=im1, ant=im0)
-        newColList = newColList.add(im1)
+            im1 = compute(central=im1, before=im0)
+            new_col_list = new_col_list.add(im1)
 
-        newCol = ee.ImageCollection(newColList)
+            newCol = ee.ImageCollection(new_col_list)
 
-        return newCol
+            self._slope = newCol
+
+        return self._slope
 
     def total_bkp(self, collection=None):
         """ Compute the total number of breakpoint in each pixel
 
         :param collection: the collection that hold the breakpoint data, if
             None, it'll be computed.
-        :param collection: ee.ImageCollection
+        :type collection: ee.ImageCollection
         :return: A single Image with the total number of breakpoints in a band
             called `total_bkp`
         :rtype: ee.Image
         """
-        col = collection if collection else self.slope()
+        col = collection if collection else self.slope
         sum_bkp = ee.Image(col.select("bkp").sum()).select([0], ["total_bkp"])
         return sum_bkp
 
@@ -532,18 +596,19 @@ class LandTrendr(object):
         :return: An image with the following bands
 
             :{index}_{year}: fitted index value for that year
+        :rtype: ee.Image
         """
-        col = self.breakdown()
+        col = self.breakdown
         anio0 = ee.Date(col[0].get("system:time_start")).get("year").format()
 
-        imgF = col[0].select([self.index + "_fit"],
-                             [ee.String(self.index).cat(ee.String('_')).cat(anio0)])
+        imgF = col[0].select([self.fit_band + "_fit"],
+                             [ee.String(self.fit_band).cat(ee.String('_')).cat(anio0)])
 
         for i in range(1, len(col)):
             anio = ee.Date(col[i].get("system:time_start")).get(
                 "year").format()
-            img = col[i].select([self.index + "_fit"],
-                                [ee.String(self.index).cat(ee.String('_')).cat(anio)])
+            img = col[i].select([self.fit_band + "_fit"],
+                                [ee.String(self.fit_band).cat(ee.String('_')).cat(anio)])
             imgF = imgF.addBands(img)
 
         return imgF
@@ -562,7 +627,7 @@ class LandTrendr(object):
         :rtype: namedtuple
         """
         # APLICO LANDTRENDR
-        serie = self.breakdown()
+        serie = self.breakdown
         col = ee.ImageCollection(serie)
 
         imgacum = ee.Image.constant(0).select([0], ["n_bkp"]).toUint8()
@@ -588,322 +653,231 @@ class LandTrendr(object):
 
         total = ee.Number(total).toInt8()
 
-        # total = tools.execli(ee.Number(total).getInfo)()#.add(ee.Number(2)).getInfo()
-        # total = int(total)
-
         bkps = namedtuple("Breakpoints", ["image", "total"])
 
         return bkps(image=img_final, total=total)
 
-    def break2band(self):
-        """ Generate an image holding the data for each found breakpoint
+    def loss(self, skip_middle=True, skip_slope=0.05):
+        """ Compute loss magnitude from a loss breakpoint until next
+        breakpoint
 
-        Return an Image with the following bands:
-
-        - year_{breakpoint}: year for each breakpoint. Number of breakpoints in
-          the whole image may differ from the number of breakpoints in
-          each pixel. Therefore, bands will correspond to breakpoint in
-          the whole image.
-
-            Example:
-
-            - bkps in the whole image: 5
-            - bkps in one pixel: 3
-            - values of bands in that pixel:
-
-              - year_1: 0
-              - year_2: 0
-              - year_3: 1999
-              - year_4: 2005
-              - year_5: 2017
-
-        - change_{id}: change value for each breakpoint
-        - backward_{id}: backward change value
-        - forward_{id}: forward change value
-
-        :rtype: ee.Image
+        :param skip_middle: If the next date is also a loss, skip it.
+        :type skip_middle: bool
+        :param skip_slope: skip middle if the slope of the stretch before is
+            greater than this value
+        :type skip_slope: float
+        :rtype: ee.ImageCollection
         """
-        # APLICO LANDTRENDR
-        # breakdown = self.breakdown()
-        # col = ee.ImageCollection(serie)
+        slope = self.slope.sort('system:time_start', True)
+        last_date = ee.Number(self.date_range.get(-1)).toInt()
+        fit_band = self.fit_band + '_fit'
 
-        sufijos = ["year", "change", "backward", "forward", "fit"]
-        sufijos = ee.List(sufijos)
+        def over_slope(img, inidict):
+            inidict = ee.Dictionary(inidict)
+            ini = ee.List(inidict.get('images'))
 
-        col = self.slope()
+            fitted = img.select([fit_band])
+            year = img.select(['year'])
 
-        # CONVIERTO LA COL A UNA LISTA
-        colL = col.toList(100)
+            # get image date to pass to the computed image
+            time_start = img.date().millis()
 
-        # PRIMER IMG DE LA LISTA
-        img0 = ee.Image(colL.get(0))
+            # statistics
+            rmse = img.select(['rmse'])
 
-        # IMAGEN NUEVA CON LA BANDA EN LA QUE SE ACUMULARAN LOS bkp
-        img_ini = ee.Image(1).select([0],["id_bkp"]).toUint8()
+            # date list from next to last
+            date = img.date().get(self.date_measure).toInt()
+            rrange = ee.List.sequence(date.add(1), last_date)
 
-        # LISTA CON UNA IMG: LA PRIMER IMAGEN ORIGINAL SUMADA LA BANDA id_bkp
-        acum = ee.List([img0.addBands(img_ini)])
+            # loss?
+            loss_mask = img.select(['loss'])
 
-        # FUNCION PARA ACUMULAR bkp
-        def addId(img, acum):
-            # CAST acum
-            listacum = ee.List(acum)
+            # loss before?
+            loss_before = ee.Image(inidict.get('loss_before'))
 
-            # OBTENGO LA ULTIMA IMG DE LA LISTA
-            ultima = ee.Image(listacum.get(-1))
+            # update loss_before
+            new_loss_before = loss_mask.select([0], ['loss_before'])
 
-            # OBTENGO LA BANDA id_bkp DE LA ULTIMA IMG
-            bkp_ultima = ultima.select("id_bkp")
+            times = tools_image.constant(0, ['times'])
+            rest = tools_image.constant(0, ['next_bkp', 'loss'])
 
-            # OBTENGO LA BANDA bkp DE LA IMG ACTUAL (0 Y 1) Y LA RENOMBRO
-            bkp_img = ee.Image(img).select(["bkp"], ["id_bkp"]).toUint8()
+            initial = times.addBands(rest)
 
-            # SUMO LA BANDA DE BREAKPOINTS ACUMULADOS CON LA DE BREAKPOINT ACTUAL
-            nueva_bkp = ee.Image(bkp_img.add(bkp_ultima)).toUint8()
+            # function to get the amount of loss and the elapsed loss time
+            def over_range(d, ini):
+                # cast
+                ini = ee.Image(ini)
+                d = ee.Number(d)
 
-            # AGREGO LA BANDA SUMADA A LA IMG ACTUAL
-            nueva_img = ee.Image(img).addBands(nueva_bkp)
+                date_range = ee.Image(d.subtract(date)).select([0], ['next_bkp'])
 
-            # DEVUELVO LA LISTA CON LA IMAGEN AGREGADA
-            return listacum.add(nueva_img)
+                # get slope image for this d (date)
+                img_s = ee.Image(
+                    slope.filter(
+                        ee.Filter.calendarRange(d, d, self.date_measure)
+                    ).first())
 
-        colL = ee.List(colL.slice(1).iterate(addId, acum))
+                # get image date before
+                img_before = ee.Image(
+                    slope.filter(
+                        ee.Filter.calendarRange(d.subtract(1),
+                                                d.subtract(1),
+                                                self.date_measure)
+                    ).first())
 
-        col = ee.ImageCollection(colL)
+                img_before_loss = img_before.select(['loss'])
+                img_before_bkp = img_before.select(['bkp'])
 
-        # OBTENGO LA CANT MAXIMA DE BKPS
-        maxbkp = self.breakpoints().total  # ee.Number
+                # retain only loss pixels
+                img_s = img_s.updateMask(loss_mask)
 
-        # LISTA DE INDICES
-        # indices = range(0, maxbkp)
-        # indices_str = [str(i) for i in indices]
-        def int2str(integer):
-            return ee.Number(integer).toInt().format()
-        indices_str = ee.List.sequence(0, maxbkp.subtract(1)).map(int2str)
+                # retain pixels that are not preceeded by loss
+                # img_slope_before = img_s.select('slope_before')
+                mask = loss_before.Not()#.And(img_slope_before.gte(skip_slope))
+                img_s = img_s.updateMask(mask)
 
-        # CONVIERTO EN 0 A LOS VALORES EN LOS PIXELES QUE bkp = 0
-        def conversion(img):
-            condicion = img.select("bkp").eq(0)
-            return img.where(condicion, ee.Image.constant(0))
+                # catch loss
+                this_loss_mask = img_s.select(['loss'])
 
-        col = col.map(conversion)
+                # catch gain
+                this_gain_mask = img_s.select(['gain'])
 
-        # CONVIERTO LA COL A UN ARRAY
-        array = col.toArray()
+                # catch breakpoint
+                bkp = img_s.select(['bkp'])
 
-        ejeImgs = 0
-        ejeBandas = 1
+                # make a mask only if it is the first occurrence of gain
+                first_time = ini.select(['times']).eq(0).toInt()
 
-        # ORDENO EL ARRAY SEGUN LA BANDA id_bkp
-        bkps = array.arraySlice(ejeBandas, 2, 3)
-        ordenado_bkp = array.arraySort(bkps)
+                # CASE 1
+                case1 = this_gain_mask.And(img_before_loss)
 
-        # IMG DE LONGITUD TOTAL DEL ARRAY (CANT DE IMGS)
-        longitud = ordenado_bkp.arrayLength(ejeImgs)
+                # CASE 2
+                case2 = this_loss_mask.And(img_before_bkp.Not())
 
-        # CORTO EL ARRAY DEJANDO SOLO LOS AÑOS INDICADOS en maxbkp
-        cortado_bkp = ordenado_bkp.arraySlice(ejeImgs,
-                                              longitud.subtract(maxbkp),
-                                              longitud)
+                # CASE 3
+                case3 = this_loss_mask.Not().And(this_gain_mask.Not()).And(bkp)
 
-        # DEBUG
-        # print(cortado_bkp.getInfo())
+                # EXTRA CASE
+                if not skip_middle:
+                    extra_case = this_loss_mask.And(img_before_loss)
+                    retain = case1.Or(case2).Or(case3).Or(extra_case).And(first_time)
+                else:
+                    # retain
+                    retain = case1.Or(case2).Or(case3).And(first_time)
 
-        # ORDENO EL ARRAY CORTADO SEGUN LOS AÑOS
-        anios = cortado_bkp.arraySlice(ejeBandas, 3, 4)
-        ordenado_anios = cortado_bkp.arraySort(anios).arraySlice(ejeBandas, 3, 4)
+                # update times
+                times = ini.select(['times']).add(retain)
 
-        # CORTO LA BANDA DE CAMBIO
-        cambio = cortado_bkp.arraySlice(ejeBandas, 6, 7)
-        array_final = ordenado_anios.arrayCat(cambio, ejeBandas)
+                # get loss magnitude
+                new_fitted = img_s.select([fit_band])
+                loss = fitted.subtract(new_fitted) \
+                    .select([0], ['loss_magnitude']) \
+                    .updateMask(retain).unmask()
 
-        # CORTO LAS BANDAS slope_before Y slope_after
-        slope_before = cortado_bkp.arraySlice(ejeBandas, 4, 5)
-        slope_after = cortado_bkp.arraySlice(ejeBandas, 5, 6)
-        fit = cortado_bkp.arraySlice(ejeBandas, 1, 2)
-        array_final = array_final.arrayCat(slope_before, ejeBandas)
-        array_final = array_final.arrayCat(slope_after, ejeBandas)
-        array_final = array_final.arrayCat(fit, ejeBandas)
+                range_i = date_range.updateMask(retain).unmask().toInt()
 
-        # TRANSFORMO EN UNA IMAGES
-        # img = ordenado_anios.arrayFlatten([indices_str,["a"]])
-        # img = ordenado_anios.arrayTranspose().arrayFlatten([["a"], indices_str])
-        img = array_final.arrayTranspose().arrayFlatten([sufijos, indices_str])
-        return img
+                to_add = times.addBands(range_i).addBands(loss)
 
-    def stretches(self, min_threshold=0.05, max_threshold=0.2):
-        """ This method characterize the segmentation stretches and returns as
-        many images as the amount of stretches. Categories are:
+                final = ini.select(['times', 'next_bkp', 'loss']).add(to_add)
 
-        * 1: no change: -min_threshold <= value <= min_threshold
-        * 2: soft loss: -max_threshold <= value < -min_threshold
-        * 3: steep loss: value < -max_threshold
-        * 4: soft gain: min_threshold < value <= max_threshold
-        * 5: steep gain: max_threshold < value
-
-        :param min_threshold: divides 'no change' and 'soft change'
-        :type min_threshold: float
-        :param max_threshold: divides 'soft change' and 'steep change'
-        :type max_threshold: float
+                return final
 
-        Return a new class called 'Stretches' with the following properties:
+            next_loss = ee.Image(rrange.iterate(over_range, initial)) \
+                          .addBands(year)\
+                          .addBands(rmse)\
+                          .addBands(loss_before)\
+                          .set('system:time_start', time_start)
 
-        - img_list: a list of images containing the stretches.
+            # set images
+            inidict = inidict.set('images', ini.add(next_loss))
 
-          Each image has the following bands:
+            return ee.Dictionary(inidict).set('loss_before', new_loss_before)
 
-            - t{n}_slope: slope of stretch n
-            - t{n}_duration: duration of stretch n (in years)
-            - t{n}_cat: category for stretch n
+        inidict = ee.Dictionary({
+            'images': ee.List([]),
+            'loss_before': tools_image.constant(0, ['loss_before'])
+        })
 
-        - image: an image with unified results. Will have as many bands as
-          found stretches, times 3. In case stretches in one pixel are
-          less than stretches in the whole image, the last will be empty.
+        newdict = ee.Dictionary(slope.iterate(over_slope, inidict))
+        images = ee.List(newdict.get('images'))
+        return ee.ImageCollection.fromImages(images)
 
-          Example:
+    # ENCODED IMAGES
 
-          The whole image has 4 stretches. The pixel that has 2
-          stretches will have the following values:
+    def breakpoints_image(self):
+        ''' Create an image with breakpoints occurrence encoded by a BitReader
+        '''
+        breakdown = self.breakdown
+        encoder = self.date_range_bitreader
+        time_list = self.date_range.getInfo()
 
-            - t1_slope: value
-            - t2_slope: value
-            - t3_slope: 0
-            - t4_slope: 0
+        # trim last and first value of time_list because are bkps always
+        time_list = time_list[1:-1]
 
-        :rtype: namedtuple
-        """
-        # Threshold images
-        umb1pos = ee.Image.constant(min_threshold).toFloat()
-        umb2pos = ee.Image.constant(max_threshold).toFloat()
+        # Create a dict with encoded values for each time
+        values = {}
+        for t in time_list:
+            encoded = encoder.encode(t)
+            values[t] = encoded
 
-        umb1neg = ee.Image.constant(-min_threshold).toFloat()
-        umb2neg = ee.Image.constant(-max_threshold).toFloat()
+        valuesEE = ee.Dictionary(values)
 
-        # Number of breakpoints in each pixel
-        bkps = self.breakpoints()
-        img_bkp = bkps.image
+        ini_img = tools_image.constant(from_dict={'bkp':0})
 
-        # Total number of breakpoints
-        total_bkp = bkps.total.getInfo()
-        max_tramos = total_bkp - 1
-
-        bandas_a = ["year_"+str(i) for i in range(total_bkp)]
-        bandas_fit = ["fit_"+str(i) for i in range(total_bkp)]
-        bandas = bandas_a + bandas_fit
-
-        b2b = self.break2band().select(bandas)
-
-        imagen = b2b.addBands(img_bkp)
-
-        # OBTENGO TANTAS IMAGENES COMO TRAMOS HAYA EN LA COLECCION
-        listaimg = []
-
-        for t, bkp in enumerate(range(2, total_bkp+1)):
-            tramos = t+1
-            mask = imagen.select("n_bkp").eq(bkp)
-            masked = imagen.updateMask(mask)
-            img_tramos = ee.Image.constant(0)
-            for id, tramo in enumerate(range(tramos, 0, -1)):
-                # NOMBRE DE LA BANDA
-                nombre_tramo = "t"+str(id+1)
-
-                # INDICES INI Y FIN
-                ini = max_tramos-tramo
-                fin = ini + 1
-
-                # SELECCIONO LAS BANDAS
-                a_ini = ee.Image(masked.select("year_"+str(ini))).toFloat()
-                a_fin = ee.Image(masked.select("year_"+str(fin))).toFloat()
-                fit_ini = masked.select("fit_"+str(ini))
-                fit_fin = masked.select("fit_"+str(fin))
-
-                # COMPUTO
-                lapso = a_fin.subtract(a_ini)
-                dif_total = fit_fin.subtract(fit_ini)
-
-                dif_anual = dif_total.divide(lapso)
-                slope = dif_anual.select([0],[nombre_tramo+"_slope"])
-
-                duracion = ee.Image(lapso.select([0],[nombre_tramo+"_duration"])).toUint8()
-
-                # CATEGORIZACION
-                uno = slope.gte(umb1neg).And(slope.lte(umb1pos))
-                dos = slope.lt(umb1neg).And(slope.gte(umb2neg))
-                tres = slope.lt(umb2neg)
-                cuatro = slope.gt(umb1pos).And(slope.lte(umb2pos))
-                cinco = slope.gt(umb2pos)
-
-                cat = uno.add(
-                      dos.multiply(2)).add(
-                      tres.multiply(3)).add(
-                      cuatro.multiply(4)).add(
-                      cinco.multiply(5))
-
-                cat = ee.Image(cat).select([0],[nombre_tramo+"_cat"]).toUint8()
-
-                img_tramos = img_tramos.addBands(slope).addBands(duracion).addBands(cat)
-
-            # SACO LA PRIMER BANDA QUE SE CREA ANTES DE INICIAR EL LOOP
-            bandas = img_tramos.bandNames().slice(1)
-            img_tramos = img_tramos.select(bandas)
-
-            listaimg.append(img_tramos)
-
-        # CREO UNA IMAGEN VACIA CON TODAS LAS BANDAS
-        bandas_cat = ["t{0}_cat".format(str(n+1)) for n in range(max_tramos)]
-        bandas_slope = ["t{0}_slope".format(str(n+1)) for n in range(max_tramos)]
-        bandas_duracion = ["t{0}_duration".format(str(n+1)) for n in range(max_tramos)]
-
-        bandas_todas = zip(bandas_slope, bandas_duracion, bandas_cat)
-
-        bandas_todas = list(chain.from_iterable(bandas_todas))
-
-        # bandas_todas = bandas_cat+bandas_slope+bandas_duracion
-
-        lista_ini = ee.List(bandas_todas).slice(1)
-
-        img_ini = ee.Image.constant(0).select([0],["t1_slope"])
-
-        def addB(item, ini):
+        def over_col(img, ini):
             ini = ee.Image(ini)
-            img = ee.Image.constant(0).select([0],[item])
-            return ini.addBands(img)
+            date = img.date().get(self.date_measure).format()
+            bkp = img.select(['bkp'])
+            date_value = valuesEE.get(date)
+            date_value_img = ee.Image.constant(date_value).select([0], ['bkp'])
+            masked_date_value = date_value_img.updateMask(bkp).unmask()
 
-        img_final = ee.Image(lista_ini.iterate(addB, img_ini))
+            return ini.add(masked_date_value)
 
-        for tramos, img in enumerate(listaimg):
-            tramos += 1
-            faltan = max_tramos - tramos
+        # slice first and last of breakdown because bkps are always 1
+        breakdown = ee.ImageCollection.fromImages(
+                       breakdown.toList(breakdown.size())\
+                             .slice(1, -1))
 
-            # print "faltan", faltan
-            # nombre = "falta{}tramo".format(str(faltan))
+        result = ee.Image(breakdown.iterate(over_col, ini_img))
+        result = result.clip(ee.Geometry.Polygon(self.region))
 
-            if faltan == 0:
-                img = tools.mask2zero(img)
-                img_final = img_final.add(img)
-                # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, self.region)
-                continue
+        return result
 
-            for tramo in range(faltan):
-                tramo += 1
-                i = tramo + tramos
-                bcat = ee.Image.constant(0).select([0],["t{0}_cat".format(str(i))])
-                bslope = ee.Image.constant(0).select([0],["t{0}_slope".format(str(i))])
-                bdur = ee.Image.constant(0).select([0],["t{0}_duration".format(str(i))])
-                total = bcat.addBands(bslope).addBands(bdur)
-                img = img.addBands(total)
+    def lossdate_image(self, threshold, bandname='lossyear', skip_middle=True):
+        """ make an encoded loss image holding dates of disturbance """
+        # slope = self.slope
+        loss = self.loss(skip_middle)
 
-            img = tools.mask2zero(img)
+        encoder = self.date_range_bitreader
+        time_list = self.date_range.getInfo()
 
-            # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, self.region)
+        # Create a dict with encoded values for each time
+        values = {}
+        for t in time_list:
+            encoded = encoder.encode(t)
+            values[t] = encoded
 
-            # bandas = img.getInfo()["bands"]
-            # print "tramos:", tramos, [i["id"] for i in bandas]
+        valuesEE = ee.Dictionary(values)
 
-            img_final = img_final.add(img)
+        def over_col(img, ini):
+            # last lossyear img
+            ini = ee.Image(ini)
 
-        # return
+            # get date (example: 2010)
+            date = img.date().get(self.date_measure).format()
+            date_value = valuesEE.get(date)
+            date_value_img = ee.Image.constant(date_value) \
+                .select([0], [bandname])
 
-        resultado = namedtuple("Stretches", ["img_list", "image"])
+            condition = img.select(['loss']).gt(threshold)
 
-        return resultado(listaimg, img_final)
+            masked_date_value = date_value_img.updateMask(condition).unmask()
+
+            return ini.add(masked_date_value)
+
+        initial = tools.empty_image(0, [bandname])
+        result = ee.Image(loss.iterate(over_col, initial))
+        result = result.clip(ee.Geometry.Polygon(self.region))
+
+        return result
