@@ -12,8 +12,9 @@ def add2map(landtrendr, map):
     :param landtrendr: a landtrendr object
     :type landtrendr: landtrendr.LandTrendr
     """
-    region = landtrendr.region
-    slope = landtrendr.slope()
+    # TODO: make it async so it does not block other widgets
+    bands = [landtrendr.fit_band+'_fit', landtrendr.fit_band]
+    slope = landtrendr.slope#.select(bands)
 
     def handler(**kwargs):
         event = kwargs['type']
@@ -26,12 +27,14 @@ def add2map(landtrendr, map):
 
             region = ee.Geometry.Point(coords)
 
-            ch = chart.Image.series(slope, region,
-                                    bands=[landtrendr.index+'_fit',
-                                           landtrendr.index],
-                                    )
+            try:
+                ch = chart.Image.series(slope, region,
+                                        bands=bands)
+                ch.title = 'LandTrendr fit\n for point {}'.format(coords)
+                chart_wid = ch.render_widget()
+            except Exception as e:
+                chart_wid = HTML('{}'.format(e))
 
-            chart_wid = ch.render_widget()
             wid.children = [chart_wid]
 
     widget = VBox()
