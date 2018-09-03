@@ -1,10 +1,11 @@
 # coding=utf-8
 """ Module with some tools for IPython Jupyter Notebook and Lab """
 
-from ipywidgets import HTML, Accordion, VBox
-from geetools import chart
+from ipywidgets import HTML, VBox
+from geetools.ui import chart
 import ee
 ee.Initialize()
+
 
 def add2map(landtrendr, map):
     """ add a Tab to Map (geetools.ipymap) to plot a LandTrendr result
@@ -14,7 +15,7 @@ def add2map(landtrendr, map):
     """
     # TODO: make it async so it does not block other widgets
     bands = [landtrendr.fit_band+'_fit', landtrendr.fit_band]
-    slope = landtrendr.slope#.select(bands)
+    slope = landtrendr.slope  # .select(bands)
 
     def handler(**kwargs):
         event = kwargs['type']

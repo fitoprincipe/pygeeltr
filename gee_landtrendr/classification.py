@@ -4,7 +4,6 @@
 import ee
 ee.Initialize()
 
-from geetools import tools
 from collections import namedtuple
 
 
@@ -27,7 +26,6 @@ def classify(ltr, *args, **kwargs):
     for n, img in enumerate(lista):
         n += 1
 
-        # img = tools.mask2zero(img)
         img = img.unmask()
 
         if n == 1:
@@ -97,7 +95,7 @@ def classify(ltr, *args, **kwargs):
             posible = posible1#.Or(posible2)
 
             cat = cambio.add(posible).select([0],["cat"])
-            cat = tools.mask2zero(cat)
+            cat = cat.unmask()
 
             cat0 = cat0.add(cat)
 
@@ -359,7 +357,7 @@ def classIncendio(ltr, umbral=0.05, agrupar=False):
     col = col.map(categoria)
 
     colL = col.toList(50)
-    s = tools.execli(colL.size().getInfo)()
+    s = colL.size().getInfo()
     newCol = ee.List([])
 
     # ARMO LAS CATEGORIAS TENIENDO EN CUENTA LO QUE SUCEDE ANTES
@@ -956,7 +954,7 @@ def stretches(ltr, min_threshold=0.05, max_threshold=0.2):
         # nombre = "falta{}tramo".format(str(faltan))
 
         if faltan == 0:
-            img = tools.mask2zero(img)
+            img = img.unmask()
             img_final = img_final.add(img)
             # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, ltr.region)
             continue
@@ -970,7 +968,7 @@ def stretches(ltr, min_threshold=0.05, max_threshold=0.2):
             total = bcat.addBands(bslope).addBands(bdur)
             img = img.addBands(total)
 
-        img = tools.mask2zero(img)
+        img = img.unmask()
 
         # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, ltr.region)
 

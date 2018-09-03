@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from geetools import tools, tools_image
+from geetools import tools, bitreader
 import math
 from collections import namedtuple
-from itertools import chain
 
 import ee
 
@@ -58,7 +57,7 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     interval_max = median.add(stddev.multiply(2)).select([0], ['max'])
 
     # SSTOT
-    sstot_image = tools_image.constant(0, ['sstot'])
+    sstot_image = tools.image.empty(0, ['sstot'])
 
     def sstot(img, sstoti):
         sstoti = ee.Image(sstoti) # cast
@@ -82,7 +81,7 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     sstot_image = ee.Image(justbands.iterate(sstot, sstot_image))
 
     # SSRES
-    ssres_image = tools_image.constant(0, ['ssres'])
+    ssres_image = tools.image.empty(0, ['ssres'])
 
     def ssres(img, ssresi):
         ssresi = ee.Image(ssresi) # cast
@@ -104,7 +103,7 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     division = ssres_image.divide(sstot_image).select([0], ['r2'])
 
     # 1-division
-    r2 = tools_image.constant(1, ['r2']).subtract(division).toFloat()
+    r2 = tools.image.empty(1, ['r2']).subtract(division).toFloat()
 
     result = namedtuple("Statistics", ["ssres", "r2"])
 
@@ -199,7 +198,7 @@ class LandTrendr(object):
         else:
             self.area = ee.Image(self.timeSeries.first()).geometry()
 
-        self.region = tools.getRegion(self.area)
+        self.region = tools.geometry.getRegion(self.area)
 
         self._core = None
         self._breakdown = None
@@ -294,7 +293,7 @@ class LandTrendr(object):
                 key = '{}'.format(i)
                 reader_dict[key] = {1: t}
 
-            self._date_range_bitreader = tools.BitReader(reader_dict)
+            self._date_range_bitreader = bitreader.BitReader(reader_dict)
 
         return self._date_range_bitreader
 
@@ -698,8 +697,8 @@ class LandTrendr(object):
             # update loss_before
             new_loss_before = loss_mask.select([0], ['loss_before'])
 
-            times = tools_image.constant(0, ['times'])
-            rest = tools_image.constant(0, ['next_bkp', 'loss'])
+            times = tools.image.empty(0, ['times'])
+            rest = tools.image.empty(0, ['next_bkp', 'loss'])
 
             initial = times.addBands(rest)
 
@@ -795,7 +794,7 @@ class LandTrendr(object):
 
         inidict = ee.Dictionary({
             'images': ee.List([]),
-            'loss_before': tools_image.constant(0, ['loss_before'])
+            'loss_before': tools.image.empty(0, ['loss_before'])
         })
 
         newdict = ee.Dictionary(slope.iterate(over_slope, inidict))
@@ -822,7 +821,7 @@ class LandTrendr(object):
 
         valuesEE = ee.Dictionary(values)
 
-        ini_img = tools_image.constant(from_dict={'bkp':0})
+        ini_img = tools.image.empty(from_dict={'bkp':0})
 
         def over_col(img, ini):
             ini = ee.Image(ini)
@@ -876,7 +875,7 @@ class LandTrendr(object):
 
             return ini.add(masked_date_value)
 
-        initial = tools.empty_image(0, [bandname])
+        initial = tools.image.empty(0, [bandname])
         result = ee.Image(loss.iterate(over_col, initial))
         result = result.clip(ee.Geometry.Polygon(self.region))
 
