@@ -198,14 +198,13 @@ class LandTrendr(object):
         else:
             self.area = ee.Image(self.timeSeries.first()).geometry()
 
-        self.region = tools.geometry.getRegion(self.area)
-
         self._core = None
         self._breakdown = None
         self._slope = None
         self._statistics = None
         self._date_range = None
         self._date_range_bitreader = None
+        self._region = None
 
     @classmethod
     def Principe(cls, timeseries, index, area=None):
@@ -257,6 +256,15 @@ class LandTrendr(object):
                      minObservationsNeeded=6)
 
         return newobj
+
+    @property
+    def region(self):
+        """ Get Region """
+        if not self._region:
+            region = tools.geometry.getRegion(self.area)
+            self._region = region
+
+        return self._region
 
     @property
     def date_range(self):
