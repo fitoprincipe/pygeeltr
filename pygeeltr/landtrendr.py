@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from geetools import tools, bitreader
@@ -6,9 +5,6 @@ import math
 from collections import namedtuple
 
 import ee
-
-# Initialize EE if not initialized
-if not ee.data._initialized: ee.Initialize()
 
 
 def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
