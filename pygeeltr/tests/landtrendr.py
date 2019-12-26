@@ -66,7 +66,7 @@ class LandTrendr(unittest.TestCase):
         self.liang = landtrendr.LandTrendr.Liang(time_serie, 'nbr', self.area)
 
     def test_slope(self):
-        slope = self.principe.slope()
+        slope = self.principe.slopes()
         self.assertEqual(type(slope), ee.ImageCollection)
 
         self.output_collection(slope, 'test_slope_col')

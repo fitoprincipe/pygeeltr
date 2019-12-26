@@ -63,7 +63,8 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
         # excude outlier
 
         diff = img.select('diff')
-        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select([0], ['out'])
+        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select(
+            [0], ['out'])
 
         # compute
         compute = diff_mean.pow(2).select([0], ['sstot'])
@@ -83,7 +84,8 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
         ssresi = ee.Image(ssresi) # cast
 
         diff = img.select('diff')
-        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select([0], ['out'])
+        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select(
+            [0], ['out'])
 
         compute = diff.pow(2).select([0], ['ssres'])
 
@@ -101,9 +103,9 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     # 1-division
     r2 = tools.image.empty(1, ['r2']).subtract(division).toFloat()
 
-    result = namedtuple("Statistics", ["ssres", "r2"])
+    result = r2.addBands(ssres_image)
 
-    return result(ssres_image, r2)
+    return result
 
 
 class LandTrendr(object):
@@ -192,7 +194,7 @@ class LandTrendr(object):
         if area:
             self.area = area
         else:
-            self.area = ee.Image(self.timeSeries.first()).geometry()
+            self.area = tools.imagecollection.mergeGeometries(self.timeSeries)
 
         self._core = None
         self._breakdown = None
@@ -211,7 +213,7 @@ class LandTrendr(object):
                      maxSegments=4,
                      spikeThreshold=0.1,
                      vertexCountOvershoot=0,
-                     preventOneYearRecovery=False,
+                     preventOneYearRecovery=True,
                      recoveryThreshold=0.9,
                      pvalThreshold=0.9,
                      bestModelProportion=0.1,
@@ -228,7 +230,7 @@ class LandTrendr(object):
                      maxSegments=4,
                      spikeThreshold=0.9,
                      vertexCountOvershoot=3,
-                     preventOneYearRecovery=False,
+                     preventOneYearRecovery=True,
                      recoveryThreshold=0.25,
                      pvalThreshold=0.05,
                      bestModelProportion=0.75,
@@ -245,7 +247,7 @@ class LandTrendr(object):
                      maxSegments=4,
                      spikeThreshold=0.9,
                      vertexCountOvershoot=0,
-                     preventOneYearRecovery=False,
+                     preventOneYearRecovery=True,
                      recoveryThreshold=0.25,
                      pvalThreshold=0.1,
                      bestModelProportion=0.75,
@@ -332,7 +334,7 @@ class LandTrendr(object):
 
     @property
     def breakdown(self):
-        ''' This method breaks down the resulting array and returns a list of
+        """ This method breaks down the resulting array and returns a list of
         images
 
         returns an ImageCollection in which each image has the following bands:
@@ -343,7 +345,7 @@ class LandTrendr(object):
 
         It assumes that each image in the collection represents only one year
         of the time series
-        '''
+        """
         if not self._breakdown:
             core = self.core
             ltr = core.select('LandTrendr')
@@ -377,17 +379,15 @@ class LandTrendr(object):
     def statistics(self):
         """ Compute statistics for this object """
         if not self._statistics:
-            collection = self.slope
-            self._statistics = statistics(collection, self.fit_band)
+            collection = self.slopes
+            stats = statistics(collection, self.fit_band)
+            self._statistics = stats
 
         return self._statistics
 
     @property
-    def slope(self):
+    def slopes(self):
         """ Calculate slope of each segment in the LandTrendR fit
-
-        Use:
-        LandTrendr(imgcol, maxSegment, index, **kwargs).slope()
 
         Each image in the collection contains the following bands:
             - [0] index: original index
@@ -519,11 +519,11 @@ class LandTrendr(object):
                            .toFloat()
 
                 # gain
-                pos_pi = ee.Number(3.14)
+                pos_pi = ee.Number(math.pi)
                 gain = angle.lt(pos_pi).And(angle.gt(0)).toInt()
 
                 # loss
-                neg_pi = ee.Number(-3.14)
+                neg_pi = ee.Number(-math.pi)
                 loss = angle.gt(neg_pi).And(angle.lt(0)).toInt()
 
                 img = central_img.addBands(before_diff_fit)\
@@ -589,7 +589,7 @@ class LandTrendr(object):
             called `total_bkp`
         :rtype: ee.Image
         """
-        col = collection if collection else self.slope
+        col = collection if collection else self.slopes
         sum_bkp = ee.Image(col.select("bkp").sum()).select([0], ["total_bkp"])
         return sum_bkp
 
@@ -671,7 +671,7 @@ class LandTrendr(object):
         :type skip_slope: float
         :rtype: ee.ImageCollection
         """
-        slope = self.slope.sort('system:time_start', True)
+        slope = self.slopes.sort('system:time_start', True)
         last_date = ee.Number(self.date_range.get(-1)).toInt()
         fit_band = self.fit_band + '_fit'
 
@@ -808,8 +808,8 @@ class LandTrendr(object):
     # ENCODED IMAGES
 
     def breakpoints_image(self):
-        ''' Create an image with breakpoints occurrence encoded by a BitReader
-        '''
+        """ Create an image with breakpoints occurrence encoded by a BitReader
+        """
         breakdown = self.breakdown
         encoder = self.date_range_bitreader
         time_list = self.date_range.getInfo()

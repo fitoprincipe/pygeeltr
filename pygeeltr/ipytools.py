@@ -15,7 +15,7 @@ def add2map(landtrendr, map):
     """
     # TODO: make it async so it does not block other widgets
     bands = [landtrendr.fit_band+'_fit', landtrendr.fit_band]
-    slope = landtrendr.slope  # .select(bands)
+    slope = landtrendr.slopes  # .select(bands)
 
     def handler(**kwargs):
         event = kwargs['type']

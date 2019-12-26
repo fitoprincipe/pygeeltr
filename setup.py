@@ -13,16 +13,16 @@ def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 version_ns = {}
-with open(os.path.join(here, 'gee_landtrendr', '_version.py')) as f:
+with open(os.path.join(here, 'pygeeltr', '_version.py')) as f:
     exec(f.read(), {}, version_ns)
 
 # the setup
 setup(
     name='pygeeltr',
     version=version_ns['__version__'],
-    description='',
+    description='LandTrendr using Google Earth Engine Python API',
     long_description='Tools for working with LandTrendr using Google Earth Engine Python API',
-    url='',
+    url='https://github.com/fitoprincipe/pygeeltr',
     author='Rodrigo E. Principe',
     author_email='fitoprincipe82@gmail.com',
     license='MIT',

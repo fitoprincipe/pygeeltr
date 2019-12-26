@@ -133,7 +133,7 @@ def class1(ltr, umb_b=0.01, umb_m=0.05):
     :rtype: ee.ImageCollection
     """
 
-    col = ltr.slope
+    col = ltr.slopes
 
     def categoria(img):
         d = img.get("system:time_start")
@@ -291,7 +291,7 @@ def classIncendio(ltr, umbral=0.05, agrupar=False):
     :rtype: ee.ImageCollection
 
     """
-    col = ltr.slope()
+    col = ltr.slopes()
 
     def categoria(img):
         d = img.get("system:time_start")
@@ -612,7 +612,7 @@ def stable_pixels(ltr, threshold=0.02):
         :viz-blue: 8-bits band for category 3
     """
 
-    col = ltr.slope()
+    col = ltr.slopes
 
     # imagen suma de breakpoints
     suma = ltr.total_bkp(col)
@@ -746,7 +746,7 @@ def max_diff(ltr, category):
     :rtype: ee.Image
     """
 
-    segmentos = ltr.slope()
+    segmentos = ltr.slopes()
     slope_before = segmentos.select("slope_before")
     slope_after = segmentos.select("slope_after")
     change = segmentos.select("change")
