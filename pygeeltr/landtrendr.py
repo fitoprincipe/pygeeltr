@@ -199,6 +199,7 @@ class LandTrendr(object):
         self._core = None
         self._breakdown = None
         self._slope = None
+        self._magnitud_duration = None
         self._statistics = None
         self._date_range = None
         self._date_range_bitreader = None
@@ -328,7 +329,15 @@ class LandTrendr(object):
                 bestModelProportion=self.bestModelProportion,
                 minObservationsNeeded=self.minObservationsNeeded)
 
-            self._core = img
+            # Adjust year row (somehow LandTrendr outputs one year before
+            # every year
+            ltr = img.select('LandTrendr')
+            rmse = img.select('rmse')
+            years = ltr.arraySlice(axis=0, start=0, end=1)
+            rest = ltr.arraySlice(axis=0, start=1, end=4)
+            final = years.add(1).arrayCat(rest, 0)
+
+            self._core = final.addBands(rmse)
 
         return self._core
 
@@ -578,6 +587,84 @@ class LandTrendr(object):
             self._slope = newCol
 
         return self._slope
+
+
+    def magnitude_duration(self, index='nbr'):
+        """ Compute magnitude and duration of events """
+        if not self._magnitud_duration:
+            magnitude = '{}_magnitude'.format(index)
+            duration = '{}_duration'.format(index)
+            start = '{}_break_start'.format(index)
+            region = ee.Geometry.Polygon(self.region)
+
+            col = self.breakdown
+            first_proxy = col.first() \
+                .addBands(ee.Image.constant(0).clip(region).toDouble().rename(magnitude))\
+                .addBands(ee.Image.constant(0).clip(region).toDouble().rename(duration))\
+                .addBands(col.first().select('year').rename(start))
+
+            rest = ee.ImageCollection.fromImages(col.toList(col.size()).slice(1))
+
+            def compare(index):
+                fit = '{}_fit'.format(index)
+
+                def wrap(i1, ilist):
+                    ilist = ee.List(ilist)
+                    i0 = ee.Image(ilist.get(-1))
+                    i1 = ee.Image(i1)
+
+                    magitude0 = i0.select(magnitude)
+                    duration0 = i0.select(duration)
+
+                    year0 = i0.select('year')
+                    year1 = i1.select('year')
+                    fit0 = i0.select(fit)
+                    fit1 = i1.select(fit)
+                    bkp0 = i0.select('bkp')
+
+                    # CHANGE
+                    magitude1 = ee.Image(0).expression(
+                        """
+                        bkp0 == 1 ? fit1-fit0
+                        : (fit1-fit0) + magitude0
+                        """, dict(
+                            bkp0=bkp0,
+                            fit0=fit0,
+                            fit1=fit1,
+                            magitude0=magitude0
+                        )).rename(magnitude)
+
+                    # DURATION
+                    duration1 = ee.Image(0).expression(
+                        """
+                        bkp0 == 1 ? year1-year0
+                        : (year1-year0) + duration0
+                        """, dict(
+                            bkp0=bkp0,
+                            year0=year0,
+                            year1=year1,
+                            duration0=duration0
+                        )).rename(duration)
+
+                    # START
+                    start0 = i0.select(start)
+                    start1 = ee.Image(0).expression(
+                        """
+                        bkp0 == 1 ? year0
+                        : start0
+                        """, dict(
+                            bkp0=bkp0,
+                            year0=year0,
+                            start0=start0
+                        )).rename(start)
+
+                    return ilist.add(i1.addBands(magitude1).addBands(duration1).addBands(start1))
+                return wrap
+
+            self._magnitud_duration = ee.ImageCollection.fromImages(
+                ee.List(rest.iterate(compare(index), ee.List([first_proxy]))))
+
+        return self._magnitud_duration
 
     def total_bkp(self, collection=None):
         """ Compute the total number of breakpoint in each pixel
@@ -884,3 +971,11 @@ class LandTrendr(object):
         result = result.clip(ee.Geometry.Polygon(self.region))
 
         return result
+
+    def greatest_loss(self, index='nbr'):
+        """ Get an image of the greatest loss. Resulting bands are:
+
+        - {index}_start_break: start year of the loss event
+        - {index}_duration: duration (in years) of the loss event
+        - {index}_magnitude: magnitude of the loss event
+        """
