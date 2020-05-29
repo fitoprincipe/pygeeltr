@@ -343,8 +343,8 @@ class LandTrendr(object):
 
     @property
     def breakdown(self):
-        """ This method breaks down the resulting array and returns a list of
-        images
+        """ This method breaks down the resulting array and returns an
+        image collection
 
         returns an ImageCollection in which each image has the following bands:
             - year = image's year
@@ -361,26 +361,61 @@ class LandTrendr(object):
             rmse = core.select('rmse')
             n = self.timeSeries.size()
             ordered_ts = self.timeSeries.sort('system:time_start')
+            bands = ["year", self.fit_band, "{}_fit".format(self.fit_band), "bkp"]
+
+            # YEARS
+            years_millis = ee.List(ordered_ts.aggregate_array('system:time_start'))
+            years = years_millis.map(lambda milli: ee.Number(ee.Date(milli).get('year')))
+
+            # PROXY IMAGES
+            proxy = ee.Image([-1, 0, 0, 0, 0]).rename(bands+['rmse']).toDouble()
+            proxy_list = years_millis.map(lambda milli: proxy.set('system:time_start', milli))
+
             ordered_list = ordered_ts.toList(n)
             seq = ee.List.sequence(0, n.subtract(1))
+
             def create(position, ini):
+                # cast
+                position = ee.Number(position)
                 ini = ee.List(ini)
+
+                # YEAR
+                date = ee.Image(ordered_list.get(position)).date()
+                year = ee.Number(date.get('year'))
+
+                # SLICE
                 nextt = ee.Number(position).add(1)
                 start = ee.Image.constant(ee.Number(position))
                 end = ee.Image.constant(nextt)
                 sli = ltr.arraySlice(1, start.toInt(), end.toInt(), 1)
 
                 # CONVERT ARRAY TO IMG
-                imgIndx = sli.arrayProject([0]).arrayFlatten(
-                    [["year", self.fit_band, self.fit_band + "_fit", "bkp"]])
+                imgIndx = sli.arrayProject([0]).arrayFlatten([bands])
+                imgIndx2 = imgIndx.addBands(rmse).set('system:time_start', date.millis())
 
-                date = ee.Image(ordered_list.get(position)).date().millis()
-                result = imgIndx.addBands(rmse).set('system:time_start', date)
-                return ini.add(result)
-            collist = ee.List(seq.iterate(create, ee.List([])))
+                def overProxy(img):
+                    # cast
+                    prox = ee.Image(img)
+
+                    date = ee.Date(prox.date())
+                    year = ee.Number(date.get('year')).toInt()
+
+                    mask = imgIndx2.select('year').eq(year)
+                    fill = prox.where(mask, imgIndx2)
+                    return fill
+
+                new_img_list = ini.map(overProxy)
+                return new_img_list
+
+            collist = ee.List(seq.iterate(create, proxy_list))
             col = ee.ImageCollection(collist)
 
-            self._breakdown = col
+            # Mask values where year = -1 (should be a mask)
+            def newMask(img):
+                mask = img.select('year').neq(-1)
+                return img.updateMask(mask)
+
+            self._breakdown = col.map(newMask)
 
         return self._breakdown
 
@@ -589,8 +624,9 @@ class LandTrendr(object):
         return self._slope
 
 
-    def magnitude_duration(self, index='nbr'):
+    def magnitude_duration(self):
         """ Compute magnitude and duration of events """
+        index = self.fit_band
         if not self._magnitud_duration:
             magnitude = '{}_magnitude'.format(index)
             duration = '{}_duration'.format(index)
@@ -972,10 +1008,21 @@ class LandTrendr(object):
 
         return result
 
-    def greatest_loss(self, index='nbr'):
+    def greatest_loss(self):
         """ Get an image of the greatest loss. Resulting bands are:
 
         - {index}_start_break: start year of the loss event
         - {index}_duration: duration (in years) of the loss event
         - {index}_magnitude: magnitude of the loss event
         """
+        index = self.fit_band
+        mag = self.magnitude_duration()
+        band = '{}_magnitude'.format(index)
+        break_start = '{}_break_start'.format(index)
+        duration = '{}_duration'.format(index)
+        bands = [band, break_start, duration, 'year']
+        proxy = ee.Image([-1, 1, 1, 1]).rename(bands)
+        mag = mag.map(lambda i: i.select(bands).multiply(proxy))
+        imax = mag.qualityMosaic(band)
+
+        return imax
