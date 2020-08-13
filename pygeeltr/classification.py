@@ -1,9 +1,6 @@
 # coding=utf-8
 """ Module holding methods to classify landtrendr results """
-
 import ee
-ee.Initialize()
-
 from collections import namedtuple
 
 

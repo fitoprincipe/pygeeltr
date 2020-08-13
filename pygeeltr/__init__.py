@@ -4,7 +4,7 @@
 
 from __future__ import absolute_import, division, print_function
 from ._version import __version__
-from . import landtrendr, classification
+from . import landtrendr, classification, ipytools
 from .landtrendr import LandTrendr
 
 __all__ = (

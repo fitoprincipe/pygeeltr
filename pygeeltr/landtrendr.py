@@ -3,7 +3,7 @@
 from geetools import tools, bitreader
 import math
 from collections import namedtuple
-
+from . import helpers
 import ee
 
 
@@ -206,7 +206,7 @@ class LandTrendr(object):
         self._region = None
 
     @classmethod
-    def Principe(cls, timeseries, index, area=None):
+    def CIEFAP(cls, timeseries, index, area=None):
         """ Factory Method to create a LandTrendr class with params defined
         by Rodrigo E. Principe (fitoprincipe82@gmail.com)
         """
@@ -625,7 +625,13 @@ class LandTrendr(object):
 
 
     def magnitude_duration(self):
-        """ Compute magnitude and duration of events """
+        """ Compute magnitude and duration of events.
+
+        Magnitude is computed by subtracting the fitted value of the year with
+        the fitted value of the last year (fit1-fit0).
+
+        Duration unit is the "date" unit (usually years)
+        """
         index = self.fit_band
         if not self._magnitud_duration:
             magnitude = '{}_magnitude'.format(index)
@@ -701,6 +707,26 @@ class LandTrendr(object):
                 ee.List(rest.iterate(compare(index), ee.List([first_proxy]))))
 
         return self._magnitud_duration
+
+    def magnitude_peaks(self, site=None, scale=30):
+        """ Get minimum and maximum magnitude value for a certain site. If site
+        is None it will compute it for the whole area.
+        """
+        site = site or self.area
+        collection = self.magnitude_duration()
+        collection = collection.select('{}_magnitude'.format(self.fit_band))
+        minMax = collection.reduce(ee.Reducer.minMax().setOutputs(['min', 'max']))
+
+        imin = minMax.select([0])
+        imax = minMax.select([1])
+
+        params = dict(geometry=site, bestEffort=True, scale=scale)
+
+        minval = imin.reduceRegion(reducer=ee.Reducer.min(), **params).values()
+        minval = ee.Number(minval.get(0))
+        maxval = imax.reduceRegion(reducer=ee.Reducer.max(), **params).values()
+        maxval = ee.Number(maxval.get(0))
+        return ee.List([minval, maxval])
 
     def total_bkp(self, collection=None):
         """ Compute the total number of breakpoint in each pixel
@@ -1008,21 +1034,66 @@ class LandTrendr(object):
 
         return result
 
-    def greatest_loss(self):
+    def greatest_loss(self, magnitude=None, duration=None):
         """ Get an image of the greatest loss. Resulting bands are:
 
         - {index}_start_break: start year of the loss event
         - {index}_duration: duration (in years) of the loss event
         - {index}_magnitude: magnitude of the loss event
+
+        gain is set to zero
         """
         index = self.fit_band
         mag = self.magnitude_duration()
-        band = '{}_magnitude'.format(index)
+        # bands
+        magnitude_b = '{}_magnitude'.format(index)
         break_start = '{}_break_start'.format(index)
-        duration = '{}_duration'.format(index)
-        bands = [band, break_start, duration, 'year']
+        duration_b = '{}_duration'.format(index)
+        bands = [magnitude_b, break_start, duration_b, 'year']
+
+        # gain
+        def gain(i):
+            mask = ee.Image(i).select(magnitude_b).gt(0)
+            return i.where(mask, 0)
+        mag = mag.map(gain)
+
+        # multiply magnitude by -1
         proxy = ee.Image([-1, 1, 1, 1]).rename(bands)
         mag = mag.map(lambda i: i.select(bands).multiply(proxy))
-        imax = mag.qualityMosaic(band)
+
+        if magnitude:
+            mag = helpers.filter_magnitude(mag, magnitude, index)
+
+        if duration:
+            mag = helpers.filter_duration(mag, duration, index)
+
+        imax = mag.qualityMosaic(magnitude_b)
+
+        return imax
+
+    def greatest_gain(self):
+        """ Get an image of the greatest gain. Resulting bands are:
+
+        - {index}_start_break: start year of the loss event
+        - {index}_duration: duration (in years) of the loss event
+        - {index}_magnitude: magnitude of the gain event
+
+        loss is set to zero
+        """
+        index = self.fit_band
+        mag = self.magnitude_duration()
+        # bands
+        magnitude = '{}_magnitude'.format(index)
+        break_start = '{}_break_start'.format(index)
+        duration = '{}_duration'.format(index)
+        bands = [magnitude, break_start, duration, 'year']
+
+        # loss
+        def loss(i):
+            mask = ee.Image(i).select(magnitude).lt(0)
+            return i.where(mask, 0)
+        mag = mag.map(loss)
+
+        imax = mag.select(bands).qualityMosaic(magnitude)
 
         return imax
