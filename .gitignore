@@ -2,3 +2,9 @@
 
 # any checkpoint
 **/.ipynb_checkpoints
+
+# any pycache
+**/__pycache__/
+
+# egg-info
+**/*.egg-info/
