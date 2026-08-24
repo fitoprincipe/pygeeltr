@@ -1,10 +1,6 @@
 # coding=utf-8
 """ Module holding methods to classify landtrendr results """
-
 import ee
-ee.Initialize()
-
-from geetools import tools
 from collections import namedtuple
 
 
@@ -27,7 +23,6 @@ def classify(ltr, *args, **kwargs):
     for n, img in enumerate(lista):
         n += 1
 
-        # img = tools.mask2zero(img)
         img = img.unmask()
 
         if n == 1:
@@ -97,7 +92,7 @@ def classify(ltr, *args, **kwargs):
             posible = posible1#.Or(posible2)
 
             cat = cambio.add(posible).select([0],["cat"])
-            cat = tools.mask2zero(cat)
+            cat = cat.unmask()
 
             cat0 = cat0.add(cat)
 
@@ -135,7 +130,7 @@ def class1(ltr, umb_b=0.01, umb_m=0.05):
     :rtype: ee.ImageCollection
     """
 
-    col = ltr.slope
+    col = ltr.slopes
 
     def categoria(img):
         d = img.get("system:time_start")
@@ -293,7 +288,7 @@ def classIncendio(ltr, umbral=0.05, agrupar=False):
     :rtype: ee.ImageCollection
 
     """
-    col = ltr.slope()
+    col = ltr.slopes()
 
     def categoria(img):
         d = img.get("system:time_start")
@@ -359,7 +354,7 @@ def classIncendio(ltr, umbral=0.05, agrupar=False):
     col = col.map(categoria)
 
     colL = col.toList(50)
-    s = tools.execli(colL.size().getInfo)()
+    s = colL.size().getInfo()
     newCol = ee.List([])
 
     # ARMO LAS CATEGORIAS TENIENDO EN CUENTA LO QUE SUCEDE ANTES
@@ -614,7 +609,7 @@ def stable_pixels(ltr, threshold=0.02):
         :viz-blue: 8-bits band for category 3
     """
 
-    col = ltr.slope()
+    col = ltr.slopes
 
     # imagen suma de breakpoints
     suma = ltr.total_bkp(col)
@@ -748,7 +743,7 @@ def max_diff(ltr, category):
     :rtype: ee.Image
     """
 
-    segmentos = ltr.slope()
+    segmentos = ltr.slopes()
     slope_before = segmentos.select("slope_before")
     slope_after = segmentos.select("slope_after")
     change = segmentos.select("change")
@@ -956,7 +951,7 @@ def stretches(ltr, min_threshold=0.05, max_threshold=0.2):
         # nombre = "falta{}tramo".format(str(faltan))
 
         if faltan == 0:
-            img = tools.mask2zero(img)
+            img = img.unmask()
             img_final = img_final.add(img)
             # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, ltr.region)
             continue
@@ -970,7 +965,7 @@ def stretches(ltr, min_threshold=0.05, max_threshold=0.2):
             total = bcat.addBands(bslope).addBands(bdur)
             img = img.addBands(total)
 
-        img = tools.mask2zero(img)
+        img = img.unmask()
 
         # funciones.asset(img, nombre, "users/rprincipe/Pruebas/"+nombre, ltr.region)
 

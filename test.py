@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from gee_landtrendr.tests import landtrendr
+from pygeeltr.tests import landtrendr
 import unittest
 import sys
 

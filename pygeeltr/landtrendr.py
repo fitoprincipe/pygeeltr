@@ -1,15 +1,10 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from geetools import tools, tools_image
+from geetools import tools, bitreader
 import math
 from collections import namedtuple
-from itertools import chain
-
+from . import helpers
 import ee
-
-# Initialize EE if not initialized
-if not ee.data._initialized: ee.Initialize()
 
 
 def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
@@ -58,7 +53,7 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     interval_max = median.add(stddev.multiply(2)).select([0], ['max'])
 
     # SSTOT
-    sstot_image = tools_image.constant(0, ['sstot'])
+    sstot_image = tools.image.empty(0, ['sstot'])
 
     def sstot(img, sstoti):
         sstoti = ee.Image(sstoti) # cast
@@ -68,7 +63,8 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
         # excude outlier
 
         diff = img.select('diff')
-        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select([0], ['out'])
+        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select(
+            [0], ['out'])
 
         # compute
         compute = diff_mean.pow(2).select([0], ['sstot'])
@@ -82,13 +78,14 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     sstot_image = ee.Image(justbands.iterate(sstot, sstot_image))
 
     # SSRES
-    ssres_image = tools_image.constant(0, ['ssres'])
+    ssres_image = tools.image.empty(0, ['ssres'])
 
     def ssres(img, ssresi):
         ssresi = ee.Image(ssresi) # cast
 
         diff = img.select('diff')
-        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select([0], ['out'])
+        outlier = diff.lte(interval_min).Or(diff.gte(interval_max)).select(
+            [0], ['out'])
 
         compute = diff.pow(2).select([0], ['ssres'])
 
@@ -104,11 +101,11 @@ def statistics(collection, band=None, suffix='_fit', skip_outliers=True):
     division = ssres_image.divide(sstot_image).select([0], ['r2'])
 
     # 1-division
-    r2 = tools_image.constant(1, ['r2']).subtract(division).toFloat()
+    r2 = tools.image.empty(1, ['r2']).subtract(division).toFloat()
 
-    result = namedtuple("Statistics", ["ssres", "r2"])
+    result = r2.addBands(ssres_image)
 
-    return result(ssres_image, r2)
+    return result
 
 
 class LandTrendr(object):
@@ -197,19 +194,19 @@ class LandTrendr(object):
         if area:
             self.area = area
         else:
-            self.area = ee.Image(self.timeSeries.first()).geometry()
-
-        self.region = tools.getRegion(self.area)
+            self.area = tools.imagecollection.mergeGeometries(self.timeSeries)
 
         self._core = None
         self._breakdown = None
         self._slope = None
+        self._magnitud_duration = None
         self._statistics = None
         self._date_range = None
         self._date_range_bitreader = None
+        self._region = None
 
     @classmethod
-    def Principe(cls, timeseries, index, area=None):
+    def CIEFAP(cls, timeseries, index, area=None):
         """ Factory Method to create a LandTrendr class with params defined
         by Rodrigo E. Principe (fitoprincipe82@gmail.com)
         """
@@ -217,7 +214,7 @@ class LandTrendr(object):
                      maxSegments=4,
                      spikeThreshold=0.1,
                      vertexCountOvershoot=0,
-                     preventOneYearRecovery=False,
+                     preventOneYearRecovery=True,
                      recoveryThreshold=0.9,
                      pvalThreshold=0.9,
                      bestModelProportion=0.1,
@@ -234,7 +231,7 @@ class LandTrendr(object):
                      maxSegments=4,
                      spikeThreshold=0.9,
                      vertexCountOvershoot=3,
-                     preventOneYearRecovery=False,
+                     preventOneYearRecovery=True,
                      recoveryThreshold=0.25,
                      pvalThreshold=0.05,
                      bestModelProportion=0.75,
@@ -251,13 +248,22 @@ class LandTrendr(object):
                      maxSegments=4,
                      spikeThreshold=0.9,
                      vertexCountOvershoot=0,
-                     preventOneYearRecovery=False,
+                     preventOneYearRecovery=True,
                      recoveryThreshold=0.25,
                      pvalThreshold=0.1,
                      bestModelProportion=0.75,
                      minObservationsNeeded=6)
 
         return newobj
+
+    @property
+    def region(self):
+        """ Get Region """
+        if not self._region:
+            region = tools.geometry.getRegion(self.area)
+            self._region = region
+
+        return self._region
 
     @property
     def date_range(self):
@@ -294,7 +300,7 @@ class LandTrendr(object):
                 key = '{}'.format(i)
                 reader_dict[key] = {1: t}
 
-            self._date_range_bitreader = tools.BitReader(reader_dict)
+            self._date_range_bitreader = bitreader.BitReader(reader_dict)
 
         return self._date_range_bitreader
 
@@ -323,14 +329,22 @@ class LandTrendr(object):
                 bestModelProportion=self.bestModelProportion,
                 minObservationsNeeded=self.minObservationsNeeded)
 
-            self._core = img
+            # Adjust year row (somehow LandTrendr outputs one year before
+            # every year
+            ltr = img.select('LandTrendr')
+            rmse = img.select('rmse')
+            years = ltr.arraySlice(axis=0, start=0, end=1)
+            rest = ltr.arraySlice(axis=0, start=1, end=4)
+            final = years.add(1).arrayCat(rest, 0)
+
+            self._core = final.addBands(rmse)
 
         return self._core
 
     @property
     def breakdown(self):
-        ''' This method breaks down the resulting array and returns a list of
-        images
+        """ This method breaks down the resulting array and returns an
+        image collection
 
         returns an ImageCollection in which each image has the following bands:
             - year = image's year
@@ -340,33 +354,68 @@ class LandTrendr(object):
 
         It assumes that each image in the collection represents only one year
         of the time series
-        '''
+        """
         if not self._breakdown:
             core = self.core
             ltr = core.select('LandTrendr')
             rmse = core.select('rmse')
             n = self.timeSeries.size()
             ordered_ts = self.timeSeries.sort('system:time_start')
+            bands = ["year", self.fit_band, "{}_fit".format(self.fit_band), "bkp"]
+
+            # YEARS
+            years_millis = ee.List(ordered_ts.aggregate_array('system:time_start'))
+            years = years_millis.map(lambda milli: ee.Number(ee.Date(milli).get('year')))
+
+            # PROXY IMAGES
+            proxy = ee.Image([-1, 0, 0, 0, 0]).rename(bands+['rmse']).toDouble()
+            proxy_list = years_millis.map(lambda milli: proxy.set('system:time_start', milli))
+
             ordered_list = ordered_ts.toList(n)
             seq = ee.List.sequence(0, n.subtract(1))
+
             def create(position, ini):
+                # cast
+                position = ee.Number(position)
                 ini = ee.List(ini)
+
+                # YEAR
+                date = ee.Image(ordered_list.get(position)).date()
+                year = ee.Number(date.get('year'))
+
+                # SLICE
                 nextt = ee.Number(position).add(1)
                 start = ee.Image.constant(ee.Number(position))
                 end = ee.Image.constant(nextt)
                 sli = ltr.arraySlice(1, start.toInt(), end.toInt(), 1)
 
                 # CONVERT ARRAY TO IMG
-                imgIndx = sli.arrayProject([0]).arrayFlatten(
-                    [["year", self.fit_band, self.fit_band + "_fit", "bkp"]])
+                imgIndx = sli.arrayProject([0]).arrayFlatten([bands])
+                imgIndx2 = imgIndx.addBands(rmse).set('system:time_start', date.millis())
 
-                date = ee.Image(ordered_list.get(position)).date().millis()
-                result = imgIndx.addBands(rmse).set('system:time_start', date)
-                return ini.add(result)
-            collist = ee.List(seq.iterate(create, ee.List([])))
+                def overProxy(img):
+                    # cast
+                    prox = ee.Image(img)
+
+                    date = ee.Date(prox.date())
+                    year = ee.Number(date.get('year')).toInt()
+
+                    mask = imgIndx2.select('year').eq(year)
+                    fill = prox.where(mask, imgIndx2)
+                    return fill
+
+                new_img_list = ini.map(overProxy)
+                return new_img_list
+
+            collist = ee.List(seq.iterate(create, proxy_list))
             col = ee.ImageCollection(collist)
 
-            self._breakdown = col
+            # Mask values where year = -1 (should be a mask)
+            def newMask(img):
+                mask = img.select('year').neq(-1)
+                return img.updateMask(mask)
+
+            self._breakdown = col.map(newMask)
 
         return self._breakdown
 
@@ -374,17 +423,15 @@ class LandTrendr(object):
     def statistics(self):
         """ Compute statistics for this object """
         if not self._statistics:
-            collection = self.slope
-            self._statistics = statistics(collection, self.fit_band)
+            collection = self.slopes
+            stats = statistics(collection, self.fit_band)
+            self._statistics = stats
 
         return self._statistics
 
     @property
-    def slope(self):
+    def slopes(self):
         """ Calculate slope of each segment in the LandTrendR fit
-
-        Use:
-        LandTrendr(imgcol, maxSegment, index, **kwargs).slope()
 
         Each image in the collection contains the following bands:
             - [0] index: original index
@@ -516,11 +563,11 @@ class LandTrendr(object):
                            .toFloat()
 
                 # gain
-                pos_pi = ee.Number(3.14)
+                pos_pi = ee.Number(math.pi)
                 gain = angle.lt(pos_pi).And(angle.gt(0)).toInt()
 
                 # loss
-                neg_pi = ee.Number(-3.14)
+                neg_pi = ee.Number(-math.pi)
                 loss = angle.gt(neg_pi).And(angle.lt(0)).toInt()
 
                 img = central_img.addBands(before_diff_fit)\
@@ -576,6 +623,111 @@ class LandTrendr(object):
 
         return self._slope
 
+
+    def magnitude_duration(self):
+        """ Compute magnitude and duration of events.
+
+        Magnitude is computed by subtracting the fitted value of the year with
+        the fitted value of the last year (fit1-fit0).
+
+        Duration unit is the "date" unit (usually years)
+        """
+        index = self.fit_band
+        if not self._magnitud_duration:
+            magnitude = '{}_magnitude'.format(index)
+            duration = '{}_duration'.format(index)
+            start = '{}_break_start'.format(index)
+            region = ee.Geometry.Polygon(self.region)
+
+            col = self.breakdown
+            first_proxy = col.first() \
+                .addBands(ee.Image.constant(0).clip(region).toDouble().rename(magnitude))\
+                .addBands(ee.Image.constant(0).clip(region).toDouble().rename(duration))\
+                .addBands(col.first().select('year').rename(start))
+
+            rest = ee.ImageCollection.fromImages(col.toList(col.size()).slice(1))
+
+            def compare(index):
+                fit = '{}_fit'.format(index)
+
+                def wrap(i1, ilist):
+                    ilist = ee.List(ilist)
+                    i0 = ee.Image(ilist.get(-1))
+                    i1 = ee.Image(i1)
+
+                    magitude0 = i0.select(magnitude)
+                    duration0 = i0.select(duration)
+
+                    year0 = i0.select('year')
+                    year1 = i1.select('year')
+                    fit0 = i0.select(fit)
+                    fit1 = i1.select(fit)
+                    bkp0 = i0.select('bkp')
+
+                    # CHANGE
+                    magitude1 = ee.Image(0).expression(
+                        """
+                        bkp0 == 1 ? fit1-fit0
+                        : (fit1-fit0) + magitude0
+                        """, dict(
+                            bkp0=bkp0,
+                            fit0=fit0,
+                            fit1=fit1,
+                            magitude0=magitude0
+                        )).rename(magnitude)
+
+                    # DURATION
+                    duration1 = ee.Image(0).expression(
+                        """
+                        bkp0 == 1 ? year1-year0
+                        : (year1-year0) + duration0
+                        """, dict(
+                            bkp0=bkp0,
+                            year0=year0,
+                            year1=year1,
+                            duration0=duration0
+                        )).rename(duration)
+
+                    # START
+                    start0 = i0.select(start)
+                    start1 = ee.Image(0).expression(
+                        """
+                        bkp0 == 1 ? year0
+                        : start0
+                        """, dict(
+                            bkp0=bkp0,
+                            year0=year0,
+                            start0=start0
+                        )).rename(start)
+
+                    return ilist.add(i1.addBands(magitude1).addBands(duration1).addBands(start1))
+                return wrap
+
+            self._magnitud_duration = ee.ImageCollection.fromImages(
+                ee.List(rest.iterate(compare(index), ee.List([first_proxy]))))
+
+        return self._magnitud_duration
+
+    def magnitude_peaks(self, site=None, scale=30):
+        """ Get minimum and maximum magnitude value for a certain site. If site
+        is None it will compute it for the whole area.
+        """
+        site = site or self.area
+        collection = self.magnitude_duration()
+        collection = collection.select('{}_magnitude'.format(self.fit_band))
+        minMax = collection.reduce(ee.Reducer.minMax().setOutputs(['min', 'max']))
+
+        imin = minMax.select([0])
+        imax = minMax.select([1])
+
+        params = dict(geometry=site, bestEffort=True, scale=scale)
+
+        minval = imin.reduceRegion(reducer=ee.Reducer.min(), **params).values()
+        minval = ee.Number(minval.get(0))
+        maxval = imax.reduceRegion(reducer=ee.Reducer.max(), **params).values()
+        maxval = ee.Number(maxval.get(0))
+        return ee.List([minval, maxval])
+
     def total_bkp(self, collection=None):
         """ Compute the total number of breakpoint in each pixel
 
@@ -586,7 +738,7 @@ class LandTrendr(object):
             called `total_bkp`
         :rtype: ee.Image
         """
-        col = collection if collection else self.slope
+        col = collection if collection else self.slopes
         sum_bkp = ee.Image(col.select("bkp").sum()).select([0], ["total_bkp"])
         return sum_bkp
 
@@ -668,7 +820,7 @@ class LandTrendr(object):
         :type skip_slope: float
         :rtype: ee.ImageCollection
         """
-        slope = self.slope.sort('system:time_start', True)
+        slope = self.slopes.sort('system:time_start', True)
         last_date = ee.Number(self.date_range.get(-1)).toInt()
         fit_band = self.fit_band + '_fit'
 
@@ -698,8 +850,8 @@ class LandTrendr(object):
             # update loss_before
             new_loss_before = loss_mask.select([0], ['loss_before'])
 
-            times = tools_image.constant(0, ['times'])
-            rest = tools_image.constant(0, ['next_bkp', 'loss'])
+            times = tools.image.empty(0, ['times'])
+            rest = tools.image.empty(0, ['next_bkp', 'loss'])
 
             initial = times.addBands(rest)
 
@@ -795,7 +947,7 @@ class LandTrendr(object):
 
         inidict = ee.Dictionary({
             'images': ee.List([]),
-            'loss_before': tools_image.constant(0, ['loss_before'])
+            'loss_before': tools.image.empty(0, ['loss_before'])
         })
 
         newdict = ee.Dictionary(slope.iterate(over_slope, inidict))
@@ -805,8 +957,8 @@ class LandTrendr(object):
     # ENCODED IMAGES
 
     def breakpoints_image(self):
-        ''' Create an image with breakpoints occurrence encoded by a BitReader
-        '''
+        """ Create an image with breakpoints occurrence encoded by a BitReader
+        """
         breakdown = self.breakdown
         encoder = self.date_range_bitreader
         time_list = self.date_range.getInfo()
@@ -822,7 +974,7 @@ class LandTrendr(object):
 
         valuesEE = ee.Dictionary(values)
 
-        ini_img = tools_image.constant(from_dict={'bkp':0})
+        ini_img = tools.image.empty(from_dict={'bkp':0})
 
         def over_col(img, ini):
             ini = ee.Image(ini)
@@ -876,8 +1028,72 @@ class LandTrendr(object):
 
             return ini.add(masked_date_value)
 
-        initial = tools.empty_image(0, [bandname])
+        initial = tools.image.empty(0, [bandname])
         result = ee.Image(loss.iterate(over_col, initial))
         result = result.clip(ee.Geometry.Polygon(self.region))
 
         return result
+
+    def greatest_loss(self, magnitude=None, duration=None):
+        """ Get an image of the greatest loss. Resulting bands are:
+
+        - {index}_start_break: start year of the loss event
+        - {index}_duration: duration (in years) of the loss event
+        - {index}_magnitude: magnitude of the loss event
+
+        gain is set to zero
+        """
+        index = self.fit_band
+        mag = self.magnitude_duration()
+        # bands
+        magnitude_b = '{}_magnitude'.format(index)
+        break_start = '{}_break_start'.format(index)
+        duration_b = '{}_duration'.format(index)
+        bands = [magnitude_b, break_start, duration_b, 'year']
+
+        # gain
+        def gain(i):
+            mask = ee.Image(i).select(magnitude_b).gt(0)
+            return i.where(mask, 0)
+        mag = mag.map(gain)
+
+        # multiply magnitude by -1
+        proxy = ee.Image([-1, 1, 1, 1]).rename(bands)
+        mag = mag.map(lambda i: i.select(bands).multiply(proxy))
+
+        if magnitude:
+            mag = helpers.filter_magnitude(mag, magnitude, index)
+
+        if duration:
+            mag = helpers.filter_duration(mag, duration, index)
+
+        imax = mag.qualityMosaic(magnitude_b)
+
+        return imax
+
+    def greatest_gain(self):
+        """ Get an image of the greatest gain. Resulting bands are:
+
+        - {index}_start_break: start year of the loss event
+        - {index}_duration: duration (in years) of the loss event
+        - {index}_magnitude: magnitude of the gain event
+
+        loss is set to zero
+        """
+        index = self.fit_band
+        mag = self.magnitude_duration()
+        # bands
+        magnitude = '{}_magnitude'.format(index)
+        break_start = '{}_break_start'.format(index)
+        duration = '{}_duration'.format(index)
+        bands = [magnitude, break_start, duration, 'year']
+
+        # loss
+        def loss(i):
+            mask = ee.Image(i).select(magnitude).lt(0)
+            return i.where(mask, 0)
+        mag = mag.map(loss)
+
+        imax = mag.select(bands).qualityMosaic(magnitude)
+
+        return imax
